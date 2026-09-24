@@ -1,0 +1,28 @@
+# Normalise line endings so a Windows clone and a Linux clone agree.
+# Without this, git's autocrlf rewrites every text file on checkout and the
+# diff noise drowns out real changes.
+* text=auto eol=lf
+
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary assets -- never touch these.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.tif binary
+*.tiff binary
+*.gif binary
+*.ico binary
+*.pth binary
+*.pt binary
+*.onnx binary
+*.trt binary
+*.engine binary
+*.npy binary
+*.npz binary
+
+# Keep the diff readable for generated files.
+docs/** linguist-documentation
+*.md linguist-documentation
