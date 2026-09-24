@@ -1,0 +1,90 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pixelboost"
+version = "0.1.0"
+description = "CPU/GPU accelerated image quality enhancement and super-resolution"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "PixelBoost contributors" }]
+keywords = ["super-resolution", "upscale", "image-enhancement", "realesrgan", "onnxruntime", "opencv", "cpu", "cuda"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Multimedia :: Graphics",
+  "Topic :: Scientific/Engineering :: Image Processing",
+]
+dependencies = [
+  "numpy>=1.23",
+  "pillow>=9.5",
+]
+
+[project.optional-dependencies]
+onnx-cpu = ["onnxruntime>=1.16"]
+onnx-gpu = ["onnxruntime-gpu>=1.16"]
+torch-cpu = ["torch>=2.0"]
+server = ["fastapi>=0.110", "uvicorn[standard]>=0.27", "python-multipart>=0.0.9", "pydantic>=2.0"]
+yaml = ["pyyaml>=6.0"]
+export = ["torch>=2.0", "onnx>=1.15", "onnxsim>=0.4"]
+dev = ["pytest>=7.4", "pytest-cov>=4.1", "ruff>=0.4", "mypy>=1.9"]
+all = [
+  "onnxruntime>=1.16",
+  "torch>=2.0",
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.27",
+  "python-multipart>=0.0.9",
+  "pyyaml>=6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/your-org/pixelboost"
+Repository = "https://github.com/your-org/pixelboost"
+Issues = "https://github.com/your-org/pixelboost/issues"
+Documentation = "https://github.com/your-org/pixelboost/tree/main/docs"
+
+[project.scripts]
+pixelboost = "pixelboost.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+ignore = ["E501", "B008", "SIM108"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]
+
+[tool.mypy]
+python_version = "3.9"
+warn_unused_ignores = false
+ignore_missing_imports = true
+files = ["src/pixelboost"]
+
+[tool.coverage.run]
+source = ["src/pixelboost"]
+omit = ["*/backends/torch_backend.py", "*/server/*"]

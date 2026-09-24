@@ -1,0 +1,27 @@
+# Fast preset -- optimised for throughput on a CPU-only box.
+#
+# Target: a 2 vCPU / 4 GB VPS serving 1-2 MP uploads in a couple of seconds.
+# The compact 1.2M-parameter model plus no denoise and no chroma pass is roughly
+# 8-10x the throughput of the quality preset.
+#
+#   pixelboost upscale in.jpg -o out.png --config configs/fast.yaml
+
+model: realesr-general-x4v3
+backend: auto
+provider: cpu
+threads: 0
+
+tile: 0
+tile_overlap: 0
+tile_pad: 0
+max_pixels: 24000000
+
+defaults:
+  scale: 2
+  denoise: 0.0
+  chroma_denoise: 0.0
+  detail: 0.25
+  detail_radius: 3
+  sharpen: 0.0
+  auto_levels: 0.0
+  quality: 92

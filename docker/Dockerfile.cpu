@@ -1,0 +1,40 @@
+# CPU image -- roughly 420 MB.
+#
+#   docker build -f docker/Dockerfile.cpu -t pixelboost:cpu .
+#   docker run --rm -v "$PWD/io:/io" -v pb-models:/models \
+#     pixelboost:cpu upscale /io/in.jpg -o /io/out.png --scale 4
+
+FROM python:3.11-slim AS base
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIXELBOOST_HOME=/models
+
+WORKDIR /app
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libjpeg62-turbo zlib1g libwebp7 curl \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY requirements/base.txt requirements/cpu.txt requirements/server.txt /app/requirements/
+RUN pip install --no-cache-dir -r requirements/cpu.txt -r requirements/server.txt
+
+COPY pyproject.toml README.md /app/
+COPY src /app/src
+RUN pip install --no-cache-dir --no-deps -e /app
+
+# Non-root: an image tool that parses untrusted uploads should never run as root.
+RUN useradd --create-home --uid 10001 pb && mkdir -p /models /io && chown -R pb:pb /models /io /app
+USER pb
+
+ENV OMP_NUM_THREADS=4 \
+    OPENBLAS_NUM_THREADS=4 \
+    PIXELBOOST_CPU_WORKERS=2
+
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:8000/healthz || exit 1
+
+ENTRYPOINT ["pixelboost"]
+CMD ["serve", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,0 +1,67 @@
+# docker compose -f docker/docker-compose.yml up -d
+#
+# Two profiles. Bring up the one that matches the host:
+#   docker compose --profile cpu up -d
+#   docker compose --profile gpu up -d
+#
+# The models volume is shared so the checkpoints are downloaded once. Warm it
+# before the first request, otherwise the first user waits ~30 s:
+#   docker compose run --rm cpu models download --model realesrgan-x4plus --all
+
+name: pixelboost
+
+x-common: &common
+  restart: unless-stopped
+  volumes:
+    - models:/models
+    - ./configs:/configs:ro
+  command: ["serve", "--host", "0.0.0.0", "--port", "8000"]
+  environment:
+    PIXELBOOST_HOME: /models
+    PIXELBOOST_CONFIG: /configs/default.yaml
+
+services:
+  cpu:
+    <<: *common
+    profiles: ["cpu"]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.cpu
+    image: pixelboost:cpu
+    ports:
+      - "8000:8000"
+    environment:
+      PIXELBOOST_HOME: /models
+      PIXELBOOST_CONFIG: /configs/default.yaml
+      PIXELBOOST_CPU_WORKERS: "2"
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+
+  gpu:
+    <<: *common
+    profiles: ["gpu"]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.gpu
+    image: pixelboost:gpu
+    ports:
+      - "8000:8000"
+    environment:
+      PIXELBOOST_HOME: /models
+      PIXELBOOST_CONFIG: /configs/default.yaml
+      PIXELBOOST_GPU_WORKERS: "1"
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    shm_size: 2gb
+
+volumes:
+  models:

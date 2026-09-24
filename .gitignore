@@ -1,0 +1,44 @@
+# Byte-compiled / build artefacts
+__pycache__/
+*.py[cod]
+*.so
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+
+# Test / lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Models and generated media -- never commit multi-hundred-MB checkpoints
+models/
+*.onnx
+*.pth
+*.pt
+*.ckpt
+*.trt
+*.engine
+
+# Local scratch
+out/
+output/
+*.log
+.tmp*/
+scratch/
+samples/local/
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini

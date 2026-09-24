@@ -1,0 +1,4 @@
+# Always required. Deliberately tiny -- a CPU-only deployment is numpy + Pillow.
+numpy>=1.23
+pillow>=9.5
+pyyaml>=6.0

@@ -1,0 +1,11 @@
+-r base.txt
+
+# PyTorch path: needed only if you want to load .pth checkpoints directly or
+# export them to ONNX. For serving, prefer the onnx requirements instead.
+# Install the right CUDA build from https://pytorch.org/get-started/locally/
+# e.g. pip install torch --index-url https://download.pytorch.org/whl/cu121
+torch>=2.0
+
+# Conversion only (scripts/export_onnx.py)
+onnx>=1.15
+onnxsim>=0.4

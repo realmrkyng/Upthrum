@@ -1,0 +1,81 @@
+# PixelBoost default configuration.
+#
+# Resolution order (later wins):
+#   1. built-in dataclass defaults
+#   2. this file (via --config, $PIXELBOOST_CONFIG, or ./pixelboost.yaml)
+#   3. command-line flags
+#
+# Every key here is optional. Delete what you do not need.
+
+# Where model files live. Defaults to ~/.cache/pixelboost/models
+# models_dir: /srv/pixelboost/models
+
+backend: auto          # auto | onnx | torch | classical | nearest
+model: realesrgan-x4plus
+provider: null         # null/auto | cpu | cuda | tensorrt | directml | coreml | openvino | rocm
+fp16: false            # CUDA/TensorRT only; roughly 1.7x faster, minor quality cost
+threads: 0             # CPU intra-op threads; 0 lets ONNX Runtime decide
+
+# -- tiling -------------------------------------------------------------------
+# tile is in SOURCE pixels. Peak VRAM scales with tile^2, so halving the tile
+# quarters the memory. 512 is a good default for 4-8 GB cards.
+tile: 512
+tile_overlap: 16       # feather width between tiles; raise to 32 if seams show
+tile_pad: 16           # reflect padding around the whole image (border quality)
+align: 8               # pad tiles to a multiple of this; 8 is safe for 2x/4x models
+max_pixels: 64000000   # 64 MP output ceiling; jobs above this are clamped
+warmup: true           # run one throwaway inference at start-up
+
+# -- enhancement defaults -----------------------------------------------------
+defaults:
+  scale: 4
+
+  # Pre-upscale edge-preserving denoise, 0..1. ~0.03-0.05 for JPEG sources.
+  denoise: 0.0
+  denoise_radius: 3.0
+
+  # Post-upscale chroma smoothing sigma. 1.0-2.0 kills GAN colour speckle
+  # without touching luma.
+  chroma_denoise: 0.0
+
+  # Guided-filter detail reinjection. 0.25-0.5 reads as "sharper" cleanly;
+  # above 1.0 it turns skin and foliage into watercolour.
+  detail: 0.35
+  detail_radius: 4
+  detail_eps: 0.001
+
+  # Final unsharp mask. Off by default -- detail already does most of the work
+  # and stacking both is the fastest way to a crunchy image.
+  sharpen: 0.0
+  sharpen_radius: 1.0
+  sharpen_threshold: 0.004
+
+  # Pre-upscale luma stretch for washed-out sources, 0..1.
+  auto_levels: 0.0
+
+  gamma: 1.0
+  contrast: 0.0
+  saturation: 1.0
+
+  # lanczos is right for photos; nearest only for pixel art.
+  alpha_mode: lanczos
+
+  output_format: null  # null = follow the output file extension
+  quality: 95
+  preserve_metadata: true
+
+# -- HTTP server (used by `pixelboost serve`) ---------------------------------
+server:
+  host: 0.0.0.0
+  port: 8000
+  # 0 = auto. On GPU this resolves to 1: concurrent CUDA sessions on one device
+  # are slower than running them back to back. On CPU it is cpu_count // 2.
+  workers: 0
+  queue_size: 64
+  api_keys: []         # e.g. ["sk-live-abc123"]; empty disables auth entirely
+  cors_origins: ["*"]
+  max_upload_mb: 32
+  job_ttl_seconds: 3600
+  keep_alive: 30
+  timeout: 300
+  result_format: png

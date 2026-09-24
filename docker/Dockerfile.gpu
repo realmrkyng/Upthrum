@@ -1,0 +1,55 @@
+# GPU image -- CUDA 12.4 runtime + cuDNN, roughly 3.2 GB.
+#
+# The base tag pins the CUDA major/minor that onnxruntime-gpu 1.19+ was built
+# against. Mismatching them is the single most common cause of
+# "CUDAExecutionProvider is not available" -- see docs/DEPLOY.md.
+#
+#   docker build -f docker/Dockerfile.gpu -t pixelboost:gpu .
+#   docker run --rm --gpus all -v "$PWD/io:/io" -v pb-models:/models \
+#     pixelboost:gpu upscale /io/in.jpg -o /io/out.png --provider cuda --fp16
+
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS base
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIXELBOOST_HOME=/models \
+    LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      python3.11 python3.11-venv python3-pip \
+      libjpeg-turbo8 zlib1g libwebp7 curl ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && ln -sf /usr/bin/python3.11 /usr/local/bin/python3 \
+ && ln -sf /usr/bin/python3.11 /usr/local/bin/python
+
+WORKDIR /app
+
+COPY requirements/base.txt requirements/gpu.txt requirements/server.txt /app/requirements/
+RUN python3 -m pip install --no-cache-dir --upgrade pip \
+ && python3 -m pip install --no-cache-dir -r requirements/gpu.txt -r requirements/server.txt
+
+COPY pyproject.toml README.md /app/
+COPY src /app/src
+RUN python3 -m pip install --no-cache-dir --no-deps -e /app
+
+RUN useradd --create-home --uid 10001 pb \
+ && mkdir -p /models /io /root/.cache/pixelboost/trt \
+ && chown -R pb:pb /models /io /app
+
+ENV OMP_NUM_THREADS=8 \
+    PIXELBOOST_GPU_WORKERS=1 \
+    PIXELBOOST_TRT_CACHE=/models/trt
+
+USER pb
+WORKDIR /home/pb
+RUN mkdir -p /home/pb/.cache/pixelboost/trt
+
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:8000/healthz || exit 1
+
+ENTRYPOINT ["pixelboost"]
+CMD ["serve", "--host", "0.0.0.0", "--port", "8000"]

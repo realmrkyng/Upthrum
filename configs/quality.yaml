@@ -1,0 +1,34 @@
+# Quality preset -- optimised for the best possible output.
+#
+# Slower and hungrier: the 16.7M-parameter x4plus at 4x with a pre-denoise pass
+# and a chroma cleanup. Intended for a GPU box (8 GB+) or for offline batch work
+# where wall time does not matter.
+#
+#   pixelboost upscale in.jpg -o out.png --config configs/quality.yaml
+
+model: realesrgan-x4plus
+backend: auto
+provider: auto
+fp16: false
+
+tile: 512
+tile_overlap: 32
+tile_pad: 16
+max_pixels: 128000000
+
+defaults:
+  scale: 4
+  pre_downscale: false
+
+  # Remove compression noise before the net amplifies it.
+  denoise: 0.035
+  denoise_radius: 3.0
+
+  chroma_denoise: 1.2
+  detail: 0.40
+  detail_radius: 5
+  detail_eps: 0.0008
+  sharpen: 0.0
+  auto_levels: 0.25
+  quality: 96
+  preserve_metadata: true

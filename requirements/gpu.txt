@@ -1,0 +1,11 @@
+-r base.txt
+
+# GPU inference. The wheel is built against a specific CUDA major version:
+#   onnxruntime-gpu 1.16.x -> CUDA 11.8     cuDNN 8
+#   onnxruntime-gpu 1.17.x -> CUDA 11.8     cuDNN 8
+#   onnxruntime-gpu 1.18.x -> CUDA 12.x     cuDNN 9
+#   onnxruntime-gpu 1.19+  -> CUDA 12.x     cuDNN 9
+# Check with: python -c "import onnxruntime as o; print(o.get_available_providers())"
+# If only CPUExecutionProvider is listed, the CUDA libraries are not on
+# LD_LIBRARY_PATH -- see docs/DEPLOY.md "GPU troubleshooting".
+onnxruntime-gpu>=1.17

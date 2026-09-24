@@ -1,0 +1,6 @@
+-r base.txt
+
+# CPU inference. ~15 MB wheel, no CUDA needed.
+# Do NOT install this alongside onnxruntime-gpu -- they share a module name and
+# the second install silently corrupts the first.
+onnxruntime>=1.16

@@ -1,0 +1,66 @@
+# systemd unit for a bare-metal deploy.
+#
+#   sudo cp deploy/pixelboost.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now pixelboost
+#   journalctl -u pixelboost -f
+#
+# Adjust User, WorkingDirectory and the venv path to match your host.
+
+[Unit]
+Description=PixelBoost image enhancement API
+Documentation=https://github.com/your-org/pixelboost
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pixelboost
+Group=pixelboost
+WorkingDirectory=/srv/pixelboost
+
+# Keep secrets out of the unit file.
+EnvironmentFile=-/etc/pixelboost/pixelboost.env
+
+Environment=PYTHONUNBUFFERED=1
+Environment=OMP_NUM_THREADS=4
+Environment=PIXELBOOST_HOME=/srv/pixelboost/data
+Environment=PIXELBOOST_CONFIG=/srv/pixelboost/pixelboost.yaml
+
+ExecStart=/srv/pixelboost/.venv/bin/pixelboost serve --host 127.0.0.1 --port 8000 --proxy-headers
+
+Restart=always
+RestartSec=3
+# Give in-flight GPU jobs a chance to finish instead of killing the context.
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+# --- hardening ---------------------------------------------------------------
+# An image decoder parses untrusted input; treat it accordingly.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+ReadWritePaths=/srv/pixelboost/data
+
+# Uncomment on a CPU-only box to cap the service.
+# MemoryMax=3G
+# CPUQuota=180%
+
+# Uncomment for GPU access (needs the nvidia-persistenced socket).
+# PrivateDevices=false
+# DeviceAllow=/dev/nvidia0 rw
+# DeviceAllow=/dev/nvidiactl rw
+# DeviceAllow=/dev/nvidia-uvm rw
+
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
