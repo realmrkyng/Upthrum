@@ -620,3 +620,9 @@ MIT — see [LICENSE](LICENSE).
 Bundled code contains no model weights. The referenced Real-ESRGAN models are
 BSD-3-Clause; review their licence before commercial redistribution of the
 weights or of generated output.
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+
+This project uses third-party components, including Real-ESRGAN models.
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for their licenses and
+copyright notices.
+
