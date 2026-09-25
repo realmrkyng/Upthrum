@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 
+from pixelboost.errors import OutOfMemory
 from pixelboost.tiling import Tiler, axis_ranges, plan_tiles, suggest_tile
 
 
@@ -114,13 +115,13 @@ def test_progress_callback_is_exhaustive():
 
 def test_output_budget_guard():
     tiler = Tiler(scale=4, tile=64, overlap=8, max_output_pixels=10_000)
-    with pytest.raises(Exception):
+    with pytest.raises(OutOfMemory):
         tiler.run(ramp(200, 200), lambda t: t.repeat(4, 0).repeat(4, 1))
 
 
 def test_tile_shape_mismatch_is_reported():
     tiler = Tiler(scale=4, tile=32, overlap=4, pad=0, align=1)
-    with pytest.raises(Exception):
+    with pytest.raises(OutOfMemory):
         tiler.run(ramp(64, 64), lambda t: t.repeat(2, 0).repeat(2, 1))
 
 

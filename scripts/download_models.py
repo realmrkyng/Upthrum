@@ -126,7 +126,7 @@ def main() -> int:
 
     usage = disk_usage(cfg.models_dir)
     print(f"\nmodels directory: {usage['path']} ({usage['files']} files, {usage['human']})")
-    print(f"next: pixelboost upscale input.jpg -o output.png --scale 4")
+    print("next: pixelboost upscale input.jpg -o output.png --scale 4")
     return 1 if failures else 0
 
 

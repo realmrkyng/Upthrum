@@ -10,7 +10,7 @@ resizer, an ONNX Runtime graph and a PyTorch module without branching.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 import numpy as np
 
@@ -26,9 +26,21 @@ class Backend:
     name: str = "base"
     native_scale: int = 1
     requires_tiling: bool = False
+    handles_detail: bool = False
+    """Whether this backend applies the detail boost itself.
+
+    The pipeline's post-pass exists because a neural net's output is
+    systematically soft and wants a guided-filter lift on top. Backends that
+    already integrate that pass -- ``classical``, ``upthrum`` -- must set this
+    to True, or the lift is applied twice and the image is over-sharpened into
+    watercolour. ``nearest`` deliberately leaves it False: it does no
+    processing at all, and pixel-art is the one case where the user is expected
+    to control the detail stage by hand.
+    """
+
     device: str = "cpu"
 
-    def __init__(self, model: Optional[str] = None, provider: Optional[str] = None) -> None:
+    def __init__(self, model: str | None = None, provider: str | None = None) -> None:
         self.model = model
         self.provider_requested = provider
 
@@ -50,7 +62,7 @@ class Backend:
     def close(self) -> None:
         """Release device memory and file handles."""
 
-    def info(self) -> Dict[str, Any]:
+    def info(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "model": self.model,
@@ -58,9 +70,10 @@ class Backend:
             "device": self.device,
             "native_scale": self.native_scale,
             "requires_tiling": self.requires_tiling,
+            "handles_detail": self.handles_detail,
         }
 
-    def __enter__(self) -> "Backend":
+    def __enter__(self) -> Backend:
         return self
 
     def __exit__(self, *exc: Any) -> None:

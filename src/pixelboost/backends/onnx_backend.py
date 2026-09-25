@@ -19,7 +19,8 @@ on every cold start; the cache directory is configured here for that reason.
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 
@@ -73,7 +74,7 @@ def _ort():
     return ort
 
 
-def available_providers() -> List[str]:
+def available_providers() -> list[str]:
     try:
         ort = _ort()
     except BackendUnavailable:
@@ -86,7 +87,7 @@ def has_gpu() -> bool:
     return any(p != "CPUExecutionProvider" for p in providers)
 
 
-def normalize_provider(requested: Optional[str]) -> Optional[str]:
+def normalize_provider(requested: str | None) -> str | None:
     if not requested or requested == "auto":
         return None
     key = requested.strip().lower()
@@ -100,7 +101,7 @@ def normalize_provider(requested: Optional[str]) -> Optional[str]:
     )
 
 
-def resolve_providers(requested: Optional[str], fp16: bool = False) -> List[Any]:
+def resolve_providers(requested: str | None, fp16: bool = False) -> list[Any]:
     """Build the ONNX Runtime provider list, with a CPU fallback always present.
 
     TensorRT is listed *before* CUDA on purpose: ORT tries providers in order and
@@ -115,7 +116,7 @@ def resolve_providers(requested: Optional[str], fp16: bool = False) -> List[Any]
         )
 
     target = normalize_provider(requested)
-    chosen: List[str]
+    chosen: list[str]
     if target is None:
         chosen = [p for p in AUTO_PROVIDER_ORDER if p in installed]
         if not chosen:
@@ -132,7 +133,7 @@ def resolve_providers(requested: Optional[str], fp16: bool = False) -> List[Any]
         if target == "TensorrtExecutionProvider" and "CUDAExecutionProvider" in installed:
             chosen.append("CUDAExecutionProvider")
 
-    providers: List[Any] = []
+    providers: list[Any] = []
     for name in chosen:
         if name == "TensorrtExecutionProvider":
             cache = os.environ.get(
@@ -188,12 +189,12 @@ class OnnxBackend(Backend):
     def __init__(
         self,
         model_path: str,
-        provider: Optional[str] = None,
+        provider: str | None = None,
         *,
         native_scale: int = 4,
         fp16: bool = False,
         threads: int = 0,
-        model_name: Optional[str] = None,
+        model_name: str | None = None,
         normalize_output: str = "auto",
         device_id: int = 0,
     ) -> None:
@@ -242,7 +243,7 @@ class OnnxBackend(Backend):
         self.fixed_size = self._read_fixed_size(meta.shape)
 
     @staticmethod
-    def _read_fixed_size(shape: Sequence[Any]) -> Optional[Tuple[int, int]]:
+    def _read_fixed_size(shape: Sequence[Any]) -> tuple[int, int] | None:
         if len(shape) != 4:
             return None
         h, w = shape[2], shape[3]
@@ -309,7 +310,7 @@ class OnnxBackend(Backend):
         side = max(8, int(side))
         self.process(np.zeros((side, side, 3), np.float32), float(self.native_scale))
 
-    def info(self) -> Dict[str, Any]:
+    def info(self) -> dict[str, Any]:
         data = super().info()
         data.update(
             {

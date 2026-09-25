@@ -43,12 +43,26 @@ not hardcode a model that is not installed.
 ```json
 {
   "version": "0.1.0",
-  "backends": ["classical", "nearest", "onnx"],
+  "backends": ["classical", "nearest", "upthrum", "onnx"],
   "onnxruntime": true,
   "torch": false,
+  "upthrum": true,
   "providers": ["CPUExecutionProvider"],
   "gpu": false,
-  "environment": ["onnxruntime : yes", "providers   : CPUExecutionProvider"],
+  "methods": [
+    { "backend": "classical", "family": "resampling", "variable": "intensity",
+      "learned_parameters": 0, "needs_model_file": false },
+    { "backend": "upthrum", "family": "phase reconstruction",
+      "variable": "local phase (S^1), not intensity",
+      "representation": "monogenic signal, per log-Gabor band",
+      "transport": "amplitude-weighted coherent mean of unit phasors",
+      "constraint": "0-dimensional persistent homology of sublevel sets",
+      "learned_parameters": 0, "trained_on": null,
+      "scales": "any >= 1", "identity_at_scale_one": true,
+      "needs_model_file": false }
+  ],
+  "environment": ["onnxruntime : yes", "upthrum     : yes (device=cpu)",
+                  "providers   : CPUExecutionProvider"],
   "models_dir": "/models",
   "models": [
     { "name": "realesrgan-x4plus", "scale": 4, "arch": "rrdb",
@@ -58,6 +72,16 @@ not hardcode a model that is not installed.
   "server": { "workers": 2, "max_upload_mb": 32, "auth_required": true }
 }
 ```
+
+The `methods` array is the machine-readable answer to "what is the difference
+between these backends": `classical` resamples intensity, `upthrum` reconstructs
+phase under a topological constraint, and both carry `learned_parameters: 0`.
+A client that wants to expose the choice to its own users should read this
+rather than hardcoding the comparison.
+
+Requesting `backend: "upthrum"` needs no model and returns
+`model: null` in the result — model-free backends report no model rather than
+the configured default.
 
 ### `GET /v1/stats`
 

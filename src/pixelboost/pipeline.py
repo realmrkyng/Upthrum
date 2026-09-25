@@ -14,12 +14,15 @@ is the difference between a good result and a mushy one:
   appears; doing it before would leave the net free to re-invent it.
 * Detail and unsharp go last, on the final-resolution buffer, so their radii are
   expressed in output pixels and mean the same thing at every scale factor.
+  A backend that already runs the detail pass internally sets
+  ``handles_detail``, which suppresses this one -- otherwise the reinforcement
+  is applied twice.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Callable, List, Optional, Tuple
+from typing import Callable
 
 import numpy as np
 
@@ -46,7 +49,7 @@ class Pipeline:
         self.opts = opts
         self.src_w = int(src_w)
         self.src_h = int(src_h)
-        self.notes: List[str] = []
+        self.notes: list[str] = []
 
         self.target_w, self.target_h = resolve_target(
             self.src_w,
@@ -65,14 +68,14 @@ class Pipeline:
             )
             self.target_w, self.target_h = clamped_w, clamped_h
 
-        self.tiler: Optional[Tiler] = None
+        self.tiler: Tiler | None = None
         self.tile_count = 0
 
     @property
     def requested_scale(self) -> float:
         return max(self.target_w / self.src_w, self.target_h / self.src_h)
 
-    def _uniform_scale(self, w: int, h: int) -> Optional[float]:
+    def _uniform_scale(self, w: int, h: int) -> float | None:
         sx = self.target_w / w
         sy = self.target_h / h
         if abs(sx - sy) <= 0.01 * max(sx, sy):
@@ -87,7 +90,7 @@ class Pipeline:
     def _upscale_tiled(
         self,
         work: np.ndarray,
-        on_progress: Optional[Callable[[int, int], None]] = None,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> np.ndarray:
         s = int(self.backend.native_scale)
         opts = self.opts
@@ -128,9 +131,9 @@ class Pipeline:
     def run(
         self,
         rgb: np.ndarray,
-        alpha: Optional[np.ndarray] = None,
-        on_progress: Optional[Callable[[int, int], None]] = None,
-    ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+        alpha: np.ndarray | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> tuple[np.ndarray, np.ndarray | None]:
         opts = self.opts
         work = rgb.astype(np.float32, copy=False)
         src_w, src_h = work.shape[1], work.shape[0]
@@ -173,7 +176,7 @@ class Pipeline:
 
         if opts.chroma_denoise > 0:
             out = ops.chroma_denoise(out, opts.chroma_denoise * gain)
-        if opts.detail > 0 and self.backend.name != "classical":
+        if opts.detail > 0 and not getattr(self.backend, "handles_detail", False):
             out = ops.detail_enhance(
                 out,
                 max(1, int(round(opts.detail_radius * gain / 4.0))) or 1,

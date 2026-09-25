@@ -6,6 +6,7 @@ torch. Everything here resolves on first attribute access.
 
 from pixelboost.backends.base import Backend
 from pixelboost.backends.classical import ClassicalBackend, NearestBackend
+from pixelboost.backends.upthrum_backend import UpthrumBackend
 
 __all__ = [
     "Backend",
@@ -13,10 +14,12 @@ __all__ = [
     "NearestBackend",
     "OnnxBackend",
     "TorchBackend",
+    "UpthrumBackend",
     "backend_capabilities",
     "create_backend",
     "onnx_available",
     "resolve_backend_name",
+    "upthrum_available",
 ]
 
 
@@ -33,14 +36,13 @@ def __getattr__(name: str):
         "resolve_backend_name",
         "describe_environment",
         "available_providers",
+        "upthrum_available",
     ):
         return getattr(importlib.import_module("pixelboost.backends.registry"), name)
     if name == "OnnxBackend":
-        return getattr(importlib.import_module("pixelboost.backends.onnx_backend"), "OnnxBackend")
+        return importlib.import_module("pixelboost.backends.onnx_backend").OnnxBackend
     if name == "TorchBackend":
-        return getattr(
-            importlib.import_module("pixelboost.backends.torch_backend"), "TorchBackend"
-        )
+        return importlib.import_module("pixelboost.backends.torch_backend").TorchBackend
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

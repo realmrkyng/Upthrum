@@ -9,8 +9,8 @@ from pixelboost.backends.registry import (
     resolve_backend_name,
     resolve_providers,
 )
-from pixelboost.config import Config, MODEL_REGISTRY, discover_config, load_config
-from pixelboost.errors import ConfigError, ProviderUnavailable
+from pixelboost.config import MODEL_REGISTRY, Config, load_config
+from pixelboost.errors import BackendUnavailable, ConfigError, ProviderUnavailable
 from pixelboost.types import EnhanceOptions
 
 needs_ort = pytest.mark.skipif(
@@ -132,7 +132,7 @@ def test_resolve_backend_name_auto_without_runtime():
 
 
 def test_resolve_backend_name_rejects_unknown():
-    with pytest.raises(Exception):
+    with pytest.raises(BackendUnavailable):
         resolve_backend_name(Config(), EnhanceOptions(backend="tpu"))
 
 

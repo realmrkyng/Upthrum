@@ -9,7 +9,7 @@ without mode branching.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any
 
 import numpy as np
 
@@ -21,10 +21,10 @@ def resolve_target(
     src_w: int,
     src_h: int,
     *,
-    scale: Optional[float] = None,
-    width: Optional[int] = None,
-    height: Optional[int] = None,
-    longest_side: Optional[int] = None,
+    scale: float | None = None,
+    width: int | None = None,
+    height: int | None = None,
+    longest_side: int | None = None,
     keep_aspect: bool = True,
 ) -> tuple[int, int]:
     """Resolve an output size from whichever sizing hint the caller supplied.
@@ -74,8 +74,8 @@ class ImageMeta:
     height: int
     format: str = "PNG"
     mode: str = "RGB"
-    icc_profile: Optional[bytes] = None
-    exif: Optional[bytes] = None
+    icc_profile: bytes | None = None
+    exif: bytes | None = None
     icc_bytes: int = 0
     has_alpha: bool = False
 
@@ -93,16 +93,16 @@ class EnhanceOptions:
     automatic pipeline ruins an image.
     """
 
-    scale: Optional[float] = 4.0
-    width: Optional[int] = None
-    height: Optional[int] = None
-    longest_side: Optional[int] = None
+    scale: float | None = 4.0
+    width: int | None = None
+    height: int | None = None
+    longest_side: int | None = None
     keep_aspect: bool = True
 
     backend: str = BACKEND_AUTO
-    model: Optional[str] = None
-    model_path: Optional[str] = None
-    provider: Optional[str] = None
+    model: str | None = None
+    model_path: str | None = None
+    provider: str | None = None
     fp16: bool = False
     threads: int = 0
 
@@ -129,20 +129,20 @@ class EnhanceOptions:
     auto_levels: float = 0.0
 
     alpha_mode: str = "lanczos"
-    output_format: Optional[str] = None
+    output_format: str | None = None
     quality: int = 95
     preserve_metadata: bool = True
 
-    extra: Dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: Optional[Dict[str, Any]]) -> "EnhanceOptions":
+    def from_dict(cls, data: dict[str, Any] | None) -> EnhanceOptions:
         if not data:
             return cls()
-        known = {f for f in cls.__dataclass_fields__}  # type: ignore[attr-defined]
+        known = set(cls.__dataclass_fields__)  # type: ignore[attr-defined]
         unknown = {k: v for k, v in data.items() if k not in known}
         clean = {k: v for k, v in data.items() if k in known and k != "extra"}
         opts = cls(**clean)
@@ -156,10 +156,10 @@ class EnhanceResult:
     """The engine's return value, including enough telemetry to debug a deployment."""
 
     image: np.ndarray
-    alpha: Optional[np.ndarray] = None
-    meta: Optional[ImageMeta] = None
+    alpha: np.ndarray | None = None
+    meta: ImageMeta | None = None
     backend: str = ""
-    model: Optional[str] = None
+    model: str | None = None
     provider: str = ""
     src_size: tuple[int, int] = (0, 0)
     dst_size: tuple[int, int] = (0, 0)
@@ -173,7 +173,7 @@ class EnhanceResult:
             return 0.0
         return self.dst_size[0] / self.src_size[0]
 
-    def summary(self) -> Dict[str, Any]:
+    def summary(self) -> dict[str, Any]:
         return {
             "backend": self.backend,
             "model": self.model,

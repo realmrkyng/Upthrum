@@ -6,13 +6,14 @@ the standalone script all share one implementation.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import shutil
 import tempfile
 import urllib.error
 import urllib.request
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable
 
 from pixelboost.config import MODEL_REGISTRY, Config, ModelSpec
 from pixelboost.errors import ModelNotFound, PixelBoostError
@@ -31,7 +32,7 @@ def file_sha256(path: str, chunk: int = 1 << 20) -> str:
     return digest.hexdigest()
 
 
-def _download(url: str, dest: str, progress: Optional[ProgressFn] = None) -> str:
+def _download(url: str, dest: str, progress: ProgressFn | None = None) -> str:
     """Stream to a temp file, then atomically move into place.
 
     A half-written 64 MB checkpoint that looks present is worse than no
@@ -56,19 +57,15 @@ def _download(url: str, dest: str, progress: Optional[ProgressFn] = None) -> str
                     progress(done, total)
         os.replace(tmp, dest)
     except urllib.error.URLError as exc:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp)
-        except OSError:
-            pass
         raise PixelBoostError(
             f"download failed for {url}: {exc}. If the host is blocked, fetch the "
             f"file manually and drop it into the models directory."
         ) from exc
     except Exception:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp)
-        except OSError:
-            pass
         raise
     return dest
 
@@ -77,7 +74,7 @@ def ensure_model(
     cfg: Config,
     spec: ModelSpec,
     force: bool = False,
-    progress: Optional[ProgressFn] = None,
+    progress: ProgressFn | None = None,
 ) -> str:
     if spec.kind == "none":
         raise ModelNotFound(f"{spec.name} is a model-free backend; nothing to download")
@@ -104,7 +101,7 @@ def ensure_model(
     return dest
 
 
-def list_models(cfg: Optional[Config] = None) -> List[Dict[str, Any]]:
+def list_models(cfg: Config | None = None) -> list[dict[str, Any]]:
     from pixelboost.backends.registry import onnx_path_for, torch_path_for
 
     rows = []
@@ -130,7 +127,7 @@ def list_models(cfg: Optional[Config] = None) -> List[Dict[str, Any]]:
 def export_onnx(
     cfg: Config,
     spec: ModelSpec,
-    output: Optional[str] = None,
+    output: str | None = None,
     opset: int = 17,
     fp16_weights: bool = False,
     dynamic: bool = True,
@@ -226,9 +223,9 @@ def export_onnx(
     return output
 
 
-def remove_model(cfg: Config, name: str, onnx_too: bool = True) -> List[str]:
+def remove_model(cfg: Config, name: str, onnx_too: bool = True) -> list[str]:
     spec = cfg.resolve_model(name)
-    removed: List[str] = []
+    removed: list[str] = []
     candidates = [cfg.model_path(spec)] if spec.filename else []
     if onnx_too and spec.filename:
         stem = os.path.splitext(spec.filename)[0]
@@ -243,7 +240,7 @@ def remove_model(cfg: Config, name: str, onnx_too: bool = True) -> List[str]:
     return removed
 
 
-def disk_usage(models_dir: str) -> Dict[str, Any]:
+def disk_usage(models_dir: str) -> dict[str, Any]:
     if not os.path.isdir(models_dir):
         return {"files": 0, "bytes": 0, "path": models_dir}
     files = 0

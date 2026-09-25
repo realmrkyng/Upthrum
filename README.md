@@ -5,7 +5,7 @@
 [![CI](https://github.com/your-org/pixelboost/actions/workflows/ci.yml/badge.svg)](https://github.com/your-org/pixelboost/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-94%20passing-brightgreen.svg)](tests)
+[![Tests](https://img.shields.io/badge/tests-176%20passing-brightgreen.svg)](tests)
 
 PixelBoost upscales and enhances images 2x-8x with a pipeline that runs on a
 plain CPU VPS **or** a CUDA GPU, from the same code and the same model file.
@@ -37,6 +37,7 @@ photo.jpg -> photo_4x.png  [1024, 768] -> [4096, 3072]  [onnx/cuda] 1180 ms
 - [HTTP API server](#http-api-server)
 - [Python API](#python-api)
 - [How it works](#how-it-works)
+- [UPTHRUM](#upthrum)
 - [Models](#models)
 - [Performance](#performance)
 - [Documentation](#documentation)
@@ -81,7 +82,7 @@ at 8x.
 
 | | |
 |---|---|
-| **Backends** | classical (numpy, no model), ONNX Runtime, PyTorch |
+| **Backends** | classical (numpy, no model), ONNX Runtime, PyTorch, UPTHRUM (phase reconstruction) |
 | **Execution providers** | CPU, CUDA, TensorRT, DirectML, CoreML, ROCm, OpenVINO |
 | **Tiled inference** | streaming accumulator, cosine feather blending, automatic tile shrink on OOM |
 | **Quality pipeline** | edge-preserving denoise → auto-levels → upscale → chroma cleanup → guided-filter detail → optional unsharp → colour |
@@ -91,7 +92,7 @@ at 8x.
 | **Interfaces** | CLI (single + batch), FastAPI server (sync + async jobs), Python API |
 | **Ops** | atomic writes, structured logging, `/healthz`, capability reporting, API keys, upload limits |
 | **Deployment** | bare metal, systemd unit, nginx config, Docker CPU + CUDA images, compose |
-| **Tests** | 94 tests, no network, no model files, runs in under two seconds |
+| **Tests** | 176 tests, no network, no model files, runs in a few seconds |
 
 ---
 
@@ -319,6 +320,7 @@ new one per request reloads the graph every time.
               ┌─────────────────────────────────────────────────────────┐
               │ backends  (one 3-method contract)                       │
               │  classical  numpy Lanczos + guided filter   always      │
+              │  upthrum    phase transport + topology      always      │
               │  onnx       ORT: CPU/CUDA/TRT/DML/CoreML    portable    │
               │  torch      RRDBNet / SRVGGNetCompact       .pth files  │
               └────────────────────┬────────────────────────────────────┘
@@ -370,9 +372,128 @@ Full write-up: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ---
 
+## UPTHRUM
+
+`upthrum` is not another set of weights. It is a different variable.
+
+Every upscaler in this repository — and, as far as I can tell, every published
+one — estimates **intensity**: given samples on a coarse lattice, predict values
+on a finer one. The predictor differs (fixed kernel, regression network, diffusion
+model) but the target is the same number per output pixel, and so is the failure
+mode. The map from coarse intensity samples to fine intensity values is not
+injective, so the fine structure that produced those samples is genuinely
+underdetermined. An intensity-domain method must therefore either blur (pick the
+smooth preimage) or hallucinate (pick a plausible one). There is no third option.
+
+UPTHRUM reconstructs **phase** instead.
+
+```
+  log-Gabor band k ──▶ monogenic triple (B, Rx, Ry)
+                       │
+                       ├─ amplitude  A = hypot(B, Rdir)
+                       ├─ phase      φ = atan2(Rdir, B)        on S¹
+                       ├─ orientation θ from the doubled-angle mean across bands
+                       └─ phase gradient ∇φ  differentiated on the unit phasor,
+                                             so it never needs unwrapping
+                                  │
+                                  ▼
+  output lattice ──▶ phase transport at every output pixel q
+                     φ_out(q) = arg Σ_t  W_t · A_t^γ · exp( i (φ_t + g·∇φ_t·Δ_t) )
+                     Δ_t = tap − q      g = phase_gain
+                                  │
+                                  ├─ κ = |Σ W exp(iφ)| / Σ W   coherence gate ∈ [0,1]
+                                  └─ amplitude from a structure-aligned kernel
+                                  │
+                                  ▼
+  topology ──▶ 0-D persistent homology of the sublevel sets
+               cancel critical points below τ = 0.18 · (p99 − p1)
+               restore source peaks the transport erased (bounded by the source)
+                                  │
+                                  ▼
+  intensity ──▶ cos(φ_out) · A_out · κ^0.5  ⊕  untouched low-pass  →  RGB
+```
+
+Because translation along a wavefront *is* a phase shift, the sub-pixel position
+of structure is determined by the phase field rather than guessed at. And because
+phases are averaged as unit vectors rather than intensities as scalars, the
+amplitude attenuation that constitutes interpolation blur never arises in the
+first place. The topology stage is what stops the reconstruction from promoting
+noise into apparent texture: the synthesised detail is constrained to carry no
+significant critical point the source did not already have.
+
+Five properties, each of which is a test in `tests/test_upthrum.py`:
+
+| Property | Meaning | Measured |
+|---|---|---|
+| Identity at scale 1 | transport collapses to the coincident sample | max error `1.8e-07` (float32 floor) |
+| No Nyquist attenuation | a band-centre sinusoid transports at unit gain | `1.08e-05`, vs 2600× worse if the phase term is dropped |
+| Intrinsic anisotropy | a step edge is reconstructed as a step | edge width 2 px vs Lanczos 8 px, no overshoot |
+| Topological invariance | insignificant critical points cannot be promoted | 79 → 79 features clean, 2575 → 79 under σ=0.03 noise |
+| DC preservation | the low-pass path is untouched | `< 1e-6` on the contractive path |
+
+Use it when the source has structure a GAN would invent over: text, UI, line art,
+technical drawings, scanned documents. On those, `realesrgan-x4plus-anime` is
+usually *worse* than either model-free backend, because it draws texture that
+isn't in the file.
+
+```bash
+# 4x, defaults
+pixelboost upscale ui.png -o ui_4x.png --backend upthrum --scale 4
+
+# any scale factor, including fractional -- 2.5x, exact width, longest side
+pixelboost upscale ui.png -o ui_2_5x.png --backend upthrum --scale 2.5
+pixelboost upscale ui.png -o ui_2400.png --backend upthrum --width 2400
+
+# three bands is the default; more helps mixed fine-texture/flat content
+pixelboost upscale ui.png -o out.png --backend upthrum --upthrum-bands 5
+
+# GPU: the FFT-bound analysis, if a CUDA build of torch is present
+pixelboost upscale ui.png -o out.png --backend upthrum --upthrum-device cuda
+```
+
+```python
+from pixelboost import enhance
+
+result, path = enhance("ui.png", "ui_4x.png", backend="upthrum", scale=4)
+print(result.summary())
+# {'backend': 'upthrum', 'model': None, 'provider': 'cpu', ...}
+```
+
+**Cost.** Roughly 4-5x the `classical` backend at the same scale, and close to
+linear in `--upthrum-bands`. It is never selected by `--backend auto`: it is
+several times slower and the two model-free backends have genuinely different
+characters, so the choice is left to you. See
+[Performance](#performance).
+
+**Not tiled.** Band analysis is non-local — the log-Gabor filters are defined on
+the whole 2-D spectrum, so cutting the input into tiles would put a seam through
+every band. UPTHRUM therefore runs whole-image analysis and streams the *output*
+in row blocks. Memory scales with input area, not with `--tile`, and
+`--max-pixels` is the guard that matters. Tune it before you point this at a
+50-megapixel scan.
+
+**Zero learned parameters, zero downloads.** `pixelboost capabilities` reports
+`"learned_parameters": 0` for this backend, and it is not a figure of speech: the
+whole method is the arithmetic in `upthrum/transport.py` plus the constraint in
+`upthrum/topology.py`. There is no `models download` step, no ONNX export, and
+nothing that can drift between two installs of the same version.
+
+**Parameters.** `--upthrum-bands`, `--upthrum-top-frequency`,
+`--upthrum-phase-gain`, `--upthrum-persistence`, `--upthrum-coherence-power`,
+`--upthrum-anisotropy`, `--upthrum-detail`, `--upthrum-device`,
+`--no-upthrum-topology`, `--no-upthrum-chroma`. Each one maps to one term in the
+equations above; [docs/TUNING.md](docs/TUNING.md) says which term, and what
+moving it does. All of them also work as a `upthrum:` block in a config file or
+as `EnhanceOptions(extra={"upthrum": {...}})`.
+
+Full derivation, the two bugs the invariants caught, and the calibration tables:
+[docs/UPTHRUM.md](docs/UPTHRUM.md).
+
+---
+
 ## Models
 
-Five built-in entries, two downloads that will not block you:
+Five Real-ESRGAN entries, plus two model-free backends that need no download:
 
 | Name | Scale | Params | Best for |
 |---|---|---|---|
@@ -382,6 +503,7 @@ Five built-in entries, two downloads that will not block you:
 | `realesr-general-wdn-x4v3` | 4 | 1.2 M | JPEG-heavy or noisy sources |
 | `realesr-animevideov3` | 4 | 2.4 M | video frames, lowest latency |
 | `classical` | any | 0 | text, UI, screenshots — no download |
+| `upthrum` | any | 0 | text, UI, line art — no download, no weights |
 
 ```bash
 pixelboost models
@@ -416,6 +538,38 @@ if you are serving real traffic with a large model, you want a GPU, or you want
 the compact model, or you want scale 2.
 
 Sizing guidance and the memory table: [docs/DEPLOY.md §0](docs/DEPLOY.md#0-sizing-the-host).
+
+### UPTHRUM cost
+
+Measured on the development laptop (12 logical cores, numpy FFTs, no BLAS
+threading), as a *ratio* to `classical` on the same host — the absolute numbers
+below will not match your machine, but the ratios have held on every host tried.
+
+| Case | vs classical 4x | Notes |
+|---|---|---|
+| `upthrum`, 2x | ~1.2x | the cheapest useful setting |
+| `upthrum`, 4x | ~4.6x | the default |
+| `upthrum`, 4x, 1 band | ~3.3x | cost is close to linear in `--upthrum-bands` |
+| `upthrum`, 4x, 5 bands | ~5.8x | |
+| `upthrum`, 2x, topology off | ~0.6x | see below |
+
+Two things dominate, and both are bounded by knobs rather than by image size:
+
+* **The topology stage is over half the runtime at scale 2** (5.96 s with it,
+  2.88 s without, same image and scale). The merge tree is a union-find whose
+  inner loop is inherently sequential and runs in Python. It is capped by
+  `topology_max_pixels` (default 65536): larger inputs are block-max-pooled to
+  that budget, which preserves maxima exactly and only blinds the analysis to
+  sub-block detail — the scale the threshold is meant to ignore anyway. Turn the
+  stage off and you lose the one property that makes UPTHRUM more than a very
+  good interpolation, so treat `--no-upthrum-topology` as an ablation switch,
+  not a performance one.
+* **The transport is O(output pixels)** with a fixed gather per pixel, which is
+  why 4x costs roughly 4x of 2x rather than 2x.
+
+A CUDA build of torch moves the FFT-bound analysis to the GPU
+(`--upthrum-device cuda`); the transport and topology stay on the CPU, so the
+speedup is real but nothing like the 30-100x of a compiled network.
 
 ---
 

@@ -101,6 +101,12 @@ hard the filter locks onto edges: lower = sharper transitions preserved, higher
 = more smoothing before extraction. Leave it alone unless you know why you are
 changing it.
 
+Backends that run the detail pass themselves (`classical`, `upthrum`) set
+`handles_detail`, which suppresses the pipeline's pass -- otherwise the boost is
+applied twice and 0.35 becomes 0.35 twice. With those backends, `opts.detail` is
+still honoured: it is forwarded into the backend's own pass rather than stacked
+on top of it.
+
 ### `denoise`
 
 Runs *before* upscaling, which is the point: a network asked to upscale noise
@@ -150,7 +156,67 @@ dark fringe. `nearest` is for pixel art with hard transparency.
 
 ---
 
+## UPTHRUM parameters
+
+Each one maps to a term in the derivation — [docs/UPTHRUM.md](UPTHRUM.md) says
+which. If you cannot point at the equation a parameter belongs to, it does not
+belong in this list, and none of these are tuning hacks.
+
+| Flag | Config key | Default | What it is |
+|---|---|---|---|
+| `--upthrum-bands` | `bands` | 3 | number of log-Gabor bands; ~linear cost |
+| `--upthrum-top-frequency` | `top_frequency` | 0.22 | highest band centre, cycles/px |
+| `--upthrum-phase-gain` | `phase_gain` | 1.0 | multiplier on `∇φ·Δ`; 1.0 is exact |
+| `--upthrum-persistence` | `persistence_relative` | 0.18 | topology threshold, fraction of p1–p99 |
+| `--upthrum-coherence-power` | `coherence_power` | 0.5 | exponent on the κ gate |
+| `--upthrum-anisotropy` | `anisotropy` | 0.55 | structure-aligned amplitude kernel |
+| `--upthrum-detail` | `detail` | 0.0 | post-transport micro-contrast, off by default |
+| `--upthrum-device` | `device` | auto | where the FFT analysis runs |
+| `--no-upthrum-topology` | `topology: false` | on | disables the constraint — ablation only |
+| `--no-upthrum-chroma` | `chroma: false` | on | leaves chroma on the smooth path |
+
+The ones that matter, in order:
+
+**`upthrum-bands`** — the only knob with a predictable quality/cost trade. Three
+covers photographic content; 4–5 helps when fine texture sits next to large flat
+regions. Each extra band costs roughly +25% wall time.
+
+**`upthrum-phase-gain`** — do not treat this as a sharpness slider. 1.0 is the
+mathematically correct linearisation; 0.9 softens edges toward the interpolant,
+1.1 produces a phase halo. If you want sharper output, use `detail` (the
+pipeline's), not this.
+
+**`upthrum-persistence`** — raise toward 0.22 for heavily compressed sources,
+where blocking artefacts are *coherent* and need a higher bar to be judged
+insignificant. The calibration table in docs/UPTHRUM.md §5.3 is the reason the
+default is 0.18 and not 0.02: at 0.02 the stage removes 0% of noise features and
+is pure cost.
+
+**`upthrum-coherence-power`** — lower it (0.3–0.4) only for very low-contrast
+sources where genuine detail lives in partially coherent regions. Above 2.0 the
+gate becomes near-binary and you get visible switching at coherence boundaries.
+
+**`topology_max_pixels`** — not exposed on the CLI because it is a memory/time
+cap, not a quality knob. The topology stage is over half the runtime at scale 2;
+this bounds it by block-max-pooling the analysis field, which preserves maxima
+exactly.
+
+---
+
 ## Recipes
+
+**Text, UI, line art** -- no model, no download, and structure a GAN would invent
+
+```bash
+pixelboost upscale ui.png -o out.png --backend upthrum --scale 4
+```
+
+**The same, at an exact width** -- UPTHRUM transports to any lattice, so there
+is no separate resampling step and no double-resample softening
+
+```bash
+pixelboost upscale ui.png -o out.png --backend upthrum --width 2400
+```
 
 **Product photos, white background**
 

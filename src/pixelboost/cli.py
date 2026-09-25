@@ -18,15 +18,28 @@ import os
 import statistics
 import sys
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pixelboost import __version__
-from pixelboost.backends.registry import backend_capabilities, describe_environment
+from pixelboost.backends.registry import BACKEND_NAMES, backend_capabilities, describe_environment
 from pixelboost.config import Config, load_config
 from pixelboost.errors import PixelBoostError
 from pixelboost.types import EnhanceOptions
 
 LOG_FORMAT = "%(levelname)-7s %(name)s: %(message)s"
+
+UPTHRUM_FLAGS = {
+    "upthrum_device": "device",
+    "upthrum_bands": "bands",
+    "upthrum_top_frequency": "top_frequency",
+    "upthrum_phase_gain": "phase_gain",
+    "upthrum_persistence": "persistence_relative",
+    "upthrum_coherence_power": "coherence_power",
+    "upthrum_anisotropy": "anisotropy",
+    "upthrum_detail": "detail",
+    "upthrum_topology": "topology",
+    "upthrum_chroma": "chroma",
+}
 
 ENHANCE_KEYS = (
     "scale",
@@ -74,7 +87,7 @@ def setup_logging(verbosity: int, quiet: bool) -> None:
     logging.basicConfig(level=level, format=LOG_FORMAT, stream=sys.stderr)
 
 
-def S(**kwargs: Any) -> Dict[str, Any]:
+def S(**kwargs: Any) -> dict[str, Any]:
     """argparse kwargs with SUPPRESS default, so unset flags stay absent."""
     kwargs.setdefault("default", argparse.SUPPRESS)
     return kwargs
@@ -108,7 +121,7 @@ def _add_target_args(p: argparse.ArgumentParser) -> None:
 
 def _add_backend_args(p: argparse.ArgumentParser) -> None:
     g = p.add_argument_group("backend")
-    g.add_argument("--backend", choices=("auto", "onnx", "torch", "classical", "nearest"), **S(help="inference backend (default auto)"))
+    g.add_argument("--backend", choices=BACKEND_NAMES, **S(help="inference backend (default auto)"))
     g.add_argument("--model", **S(help="registry model name, or a path to a .pth/.onnx file"))
     g.add_argument("--model-path", **S(help="explicit model file path, overrides --model lookup"))
     g.add_argument("--models-dir", **S(help="where model files live"))
@@ -120,6 +133,67 @@ def _add_backend_args(p: argparse.ArgumentParser) -> None:
     g.add_argument("--tile-pad", type=int, **S(help="reflect padding around the image before tiling (default 16)"))
     g.add_argument("--pre-downscale", dest="pre_downscale", action="store_true", **S(help="downscale before inference to save VRAM"))
     g.add_argument("--no-pre-downscale", dest="pre_downscale", action="store_false", **S(help="never pre-downscale"))
+
+
+def _add_upthrum_args(p: argparse.ArgumentParser) -> None:
+    """Flags for the phase-reconstruction backend.
+
+    Only meaningful with ``--backend upthrum``, but registered on every
+    enhancement subcommand so that the flags exist wherever a backend can be
+    chosen. They travel into ``EnhanceOptions.extra["upthrum"]`` rather than
+    becoming fields on the options dataclass, which keeps that dataclass a
+    description of the pipeline and lets the algorithm's parameters evolve
+    without touching the shared type.
+    """
+    g = p.add_argument_group("upthrum (phase reconstruction)")
+    g.add_argument(
+        "--upthrum-device",
+        choices=("auto", "cpu", "cuda"),
+        **S(help="run the FFT-bound analysis on cpu or cuda (default auto)"),
+    )
+    g.add_argument("--upthrum-bands", type=int, **S(help="log-Gabor bands in the hierarchy (default 3)"))
+    g.add_argument(
+        "--upthrum-top-frequency",
+        type=float,
+        **S(help="centre of the highest band, cycles/px, must stay under 0.5 (default 0.22)"),
+    )
+    g.add_argument(
+        "--upthrum-phase-gain",
+        type=float,
+        **S(help="phase extrapolation multiplier; 1.0 is the exact linearisation (default 1.0)"),
+    )
+    g.add_argument(
+        "--upthrum-persistence",
+        type=float,
+        **S(help="persistence threshold as a fraction of the p1-p99 range (default 0.18)"),
+    )
+    g.add_argument(
+        "--upthrum-coherence-power",
+        type=float,
+        **S(help="exponent on the phase-coherence gate (default 0.5)"),
+    )
+    g.add_argument(
+        "--upthrum-anisotropy",
+        type=float,
+        **S(help="structure-aligned amplitude kernel, 0..1 (default 0.55)"),
+    )
+    g.add_argument(
+        "--upthrum-detail",
+        type=float,
+        **S(help="micro-contrast built into the backend, 0..1.5 (default 0)"),
+    )
+    g.add_argument(
+        "--no-upthrum-topology",
+        dest="upthrum_topology",
+        action="store_false",
+        **S(help="disable the persistent-homology constraint (strictly worse; for ablation)"),
+    )
+    g.add_argument(
+        "--no-upthrum-chroma",
+        dest="upthrum_chroma",
+        action="store_false",
+        **S(help="leave chroma on the smooth path instead of reconstructing it"),
+    )
 
 
 def _add_enhance_args(p: argparse.ArgumentParser) -> None:
@@ -155,6 +229,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  pixelboost upscale photo.jpg -o photo_4x.png --scale 4\n"
             "  pixelboost upscale *.jpg -o out/ --model realesrgan-x4plus-anime --detail 0.5\n"
             "  pixelboost upscale in.png -o out.png --backend classical        # no model needed\n"
+            "  pixelboost upscale in.png -o out.png --backend upthrum --scale 4  # phase reconstruction\n"
             "  pixelboost upscale in.png -o out.png --provider cuda --fp16 --tile 768\n"
             "  pixelboost batch ./photos -o ./enhanced --recursive --scale 4\n"
             "  pixelboost serve --host 0.0.0.0 --port 8000 --workers 4\n"
@@ -176,6 +251,7 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--json", action="store_true", help="print a machine-readable report")
     _add_target_args(up)
     _add_backend_args(up)
+    _add_upthrum_args(up)
     _add_enhance_args(up)
 
     ba = sub.add_parser("batch", help="walk a directory tree and enhance everything")
@@ -189,6 +265,7 @@ def build_parser() -> argparse.ArgumentParser:
     ba.add_argument("--json", action="store_true", help="print a machine-readable report")
     _add_target_args(ba)
     _add_backend_args(ba)
+    _add_upthrum_args(ba)
     _add_enhance_args(ba)
 
     sv = sub.add_parser("serve", help="run the HTTP API")
@@ -219,6 +296,7 @@ def build_parser() -> argparse.ArgumentParser:
     be.add_argument("--warmup", type=int, default=1, help="warmup iterations (default 1)")
     _add_target_args(be)
     _add_backend_args(be)
+    _add_upthrum_args(be)
     _add_enhance_args(be)
 
     return parser
@@ -250,11 +328,16 @@ def _build_options(cfg: Config, ns: argparse.Namespace) -> EnhanceOptions:
         opts.model_path = ns.model_path
     if not hasattr(ns, "tile") and cfg.tile:
         opts.tile = cfg.tile
+    overrides = {
+        param: getattr(ns, flag) for flag, param in UPTHRUM_FLAGS.items() if hasattr(ns, flag)
+    }
+    if overrides:
+        opts.extra = {**(opts.extra or {}), "upthrum": overrides}
     return opts
 
 
-def _expand_inputs(patterns: List[str], exts: Optional[List[str]] = None) -> List[str]:
-    found: List[str] = []
+def _expand_inputs(patterns: list[str], exts: list[str] | None = None) -> list[str]:
+    found: list[str] = []
     for pattern in patterns:
         if os.path.isdir(pattern):
             found.extend(_walk(pattern, recursive=True, exts=exts))
@@ -277,9 +360,9 @@ def _expand_inputs(patterns: List[str], exts: Optional[List[str]] = None) -> Lis
     return unique
 
 
-def _walk(root: str, recursive: bool, exts: Optional[List[str]]) -> List[str]:
+def _walk(root: str, recursive: bool, exts: list[str] | None) -> list[str]:
     exts = [e.lower().lstrip(".") for e in (exts or [])]
-    out: List[str] = []
+    out: list[str] = []
     if recursive:
         for base, _dirs, files in os.walk(root):
             for name in sorted(files):
@@ -293,9 +376,9 @@ def _walk(root: str, recursive: bool, exts: Optional[List[str]]) -> List[str]:
     return out
 
 
-def _resolve_outputs(inputs: List[str], output: str, suffix: str, overwrite: bool) -> List[Optional[str]]:
+def _resolve_outputs(inputs: list[str], output: str, suffix: str, overwrite: bool) -> list[str | None]:
     multi = len(inputs) > 1 or os.path.isdir(output) or not os.path.splitext(output)[1]
-    targets: List[Optional[str]] = []
+    targets: list[str | None] = []
     for path in inputs:
         if multi:
             stem, ext = os.path.splitext(os.path.basename(path))
@@ -521,7 +604,6 @@ def _byte_progress(name: str):
 
 
 def cmd_benchmark(cfg: Config, ns: argparse.Namespace) -> int:
-    import numpy as np
 
     from pixelboost.backends.registry import create_backend
     from pixelboost.pipeline import Pipeline
@@ -539,7 +621,7 @@ def cmd_benchmark(cfg: Config, ns: argparse.Namespace) -> int:
     except PixelBoostError as exc:
         print(f"warmup failed: {exc}", file=sys.stderr)
 
-    timings: List[float] = []
+    timings: list[float] = []
     tiles = 0
     out_size = (0, 0)
     for _ in range(max(1, ns.repeat)):
@@ -553,7 +635,7 @@ def cmd_benchmark(cfg: Config, ns: argparse.Namespace) -> int:
     src_mp = size * size / 1e6
     dst_mp = out_size[0] * out_size[1] / 1e6
     median = statistics.median(timings)
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "backend": backend.name,
         "provider": backend.provider,
         "model": backend.model,
@@ -590,7 +672,7 @@ def _synthetic(size: int):
     return img.astype(np.float32)
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     ns = parser.parse_args(argv)
     setup_logging(ns.verbose, ns.quiet)

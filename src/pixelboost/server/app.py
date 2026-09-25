@@ -19,7 +19,7 @@ import base64
 import json
 import logging
 from contextlib import asynccontextmanager
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional
 
 from pixelboost import __version__, imageio
 from pixelboost.backends.registry import backend_capabilities, describe_environment
@@ -37,7 +37,7 @@ try:
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import JSONResponse
 
-    FASTAPI_IMPORT_ERROR: Optional[BaseException] = None
+    FASTAPI_IMPORT_ERROR: BaseException | None = None
 except ImportError as _exc:  # pragma: no cover - depends on install extra
     FASTAPI_IMPORT_ERROR = _exc
 
@@ -57,7 +57,7 @@ IMAGE_MEDIA = {
 }
 
 
-def _options_from(payload: Dict[str, Any], base: EnhanceOptions) -> EnhanceOptions:
+def _options_from(payload: dict[str, Any], base: EnhanceOptions) -> EnhanceOptions:
     """Merge request parameters over the configured defaults.
 
     Unknown keys are ignored rather than rejected, so adding a field in a new
@@ -85,8 +85,8 @@ def _options_from(payload: Dict[str, Any], base: EnhanceOptions) -> EnhanceOptio
     return opts
 
 
-def _coerce_form(form: Any) -> Dict[str, Any]:
-    out: Dict[str, Any] = {}
+def _coerce_form(form: Any) -> dict[str, Any]:
+    out: dict[str, Any] = {}
     for key in form:
         if key == "file":
             continue
@@ -103,7 +103,7 @@ def _coerce_form(form: Any) -> Dict[str, Any]:
     return out
 
 
-def create_app(config: Optional[Config] = None) -> Any:
+def create_app(config: Config | None = None) -> Any:
     """Build the ASGI app. Raises a clear error if FastAPI is missing."""
     if FASTAPI_IMPORT_ERROR is not None:
         raise PixelBoostError(
@@ -115,7 +115,7 @@ def create_app(config: Optional[Config] = None) -> Any:
     from pixelboost.server.worker import JobManager, default_worker_count
 
     cfg = config or Config()
-    state: Dict[str, Any] = {}
+    state: dict[str, Any] = {}
 
     @asynccontextmanager
     async def lifespan(app: Any):
@@ -128,7 +128,7 @@ def create_app(config: Optional[Config] = None) -> Any:
             workers = default_worker_count()
             cfg.server.workers = workers
 
-        def handler(payload: bytes, options: Dict[str, Any], progress: Any) -> Tuple[bytes, Dict[str, Any]]:
+        def handler(payload: bytes, options: dict[str, Any], progress: Any) -> tuple[bytes, dict[str, Any]]:
             opts = _options_from(options, cfg.defaults)
             blob, result = engine.enhance_bytes(payload, opts)
             return blob, result.summary()
@@ -164,7 +164,15 @@ def create_app(config: Optional[Config] = None) -> Any:
         expose_headers=["X-PixelBoost-Backend", "X-PixelBoost-Tiles", "X-PixelBoost-Ms"],
     )
 
-    async def auth(request: Request, x_api_key: Optional[str] = Header(default=None)) -> None:
+    # ``Optional`` here is deliberate and load-bearing: FastAPI resolves route
+    # and dependency signatures through ``typing.get_type_hints`` at
+    # registration time, which *evaluates* the annotations. ``str | None``
+    # under PEP 604 needs Python 3.10 to evaluate, so on 3.9 every route would
+    # fail at start-up. Everything else in this file is covered by the module's
+    # postponed-annotation import; this signature is the one a framework reads.
+    async def auth(
+        request: Request, x_api_key: Optional[str] = Header(default=None)  # noqa: UP045
+    ) -> None:
         keys = cfg.server.api_keys
         if not keys:
             return
@@ -178,7 +186,7 @@ def create_app(config: Optional[Config] = None) -> Any:
             raise HTTPException(status_code=503, detail="engine not ready")
         return inst
 
-    async def read_request(request: Request) -> Tuple[bytes, Dict[str, Any]]:
+    async def read_request(request: Request) -> tuple[bytes, dict[str, Any]]:
         limit = cfg.server.max_upload_mb * 1024 * 1024
         ctype = (request.headers.get("content-type") or "").lower()
 
@@ -198,7 +206,7 @@ def create_app(config: Optional[Config] = None) -> Any:
             filename = getattr(upload, "filename", None) or "input.png"
         else:
             data = await request.body()
-            fields = {k: v for k, v in request.query_params.items()}
+            fields = dict(request.query_params.items())
             filename = request.query_params.get("filename", "input.png")
 
         if not data:
@@ -215,7 +223,7 @@ def create_app(config: Optional[Config] = None) -> Any:
         return data, {"fields": fields, "filename": filename}
 
     @app.get("/healthz", tags=["meta"])
-    async def healthz() -> Dict[str, Any]:
+    async def healthz() -> dict[str, Any]:
         return {
             "status": "ok",
             "version": __version__,
@@ -224,7 +232,7 @@ def create_app(config: Optional[Config] = None) -> Any:
         }
 
     @app.get("/v1/capabilities", tags=["meta"])
-    async def capabilities(_: None = Depends(auth)) -> Dict[str, Any]:
+    async def capabilities(_: None = Depends(auth)) -> dict[str, Any]:
         data = backend_capabilities(cfg)
         data["version"] = __version__
         data["environment"] = describe_environment().splitlines()
@@ -237,7 +245,7 @@ def create_app(config: Optional[Config] = None) -> Any:
         return data
 
     @app.get("/v1/stats", tags=["meta"])
-    async def stats(_: None = Depends(auth)) -> Dict[str, Any]:
+    async def stats(_: None = Depends(auth)) -> dict[str, Any]:
         inst = state.get("engine")
         loaded = []
         if inst is not None:
@@ -322,7 +330,7 @@ def create_app(config: Optional[Config] = None) -> Any:
         )
 
     @app.get("/v1/jobs/{job_id}", tags=["jobs"])
-    async def job_status(job_id: str, _: None = Depends(auth)) -> Dict[str, Any]:
+    async def job_status(job_id: str, _: None = Depends(auth)) -> dict[str, Any]:
         job = state["jobs"].get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="unknown job id")
@@ -350,7 +358,7 @@ def create_app(config: Optional[Config] = None) -> Any:
         )
 
     @app.delete("/v1/jobs/{job_id}", tags=["jobs"])
-    async def cancel_job(job_id: str, _: None = Depends(auth)) -> Dict[str, Any]:
+    async def cancel_job(job_id: str, _: None = Depends(auth)) -> dict[str, Any]:
         cancelled = state["jobs"].cancel(job_id)
         if not cancelled:
             raise HTTPException(status_code=409, detail="job is not cancellable")

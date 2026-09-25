@@ -16,11 +16,12 @@ that choice:
 
 from __future__ import annotations
 
+import contextlib
 import io
 import os
 import tempfile
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 import numpy as np
 
@@ -47,19 +48,19 @@ LOSSLESS = ("PNG", "BMP", "TIFF", "WEBP")
 @dataclass
 class LoadedImage:
     rgb: np.ndarray
-    alpha: Optional[np.ndarray]
+    alpha: np.ndarray | None
     meta: ImageMeta
     gray: bool = False
 
 
-def normalize_format(name: Optional[str], fallback: str = "PNG") -> str:
+def normalize_format(name: str | None, fallback: str = "PNG") -> str:
     if not name:
         return fallback
     key = name.strip().lstrip(".").lower()
     return FORMAT_ALIASES.get(key, key.upper())
 
 
-def _to_pil(src: Union[str, bytes, "os.PathLike", Any]) -> Any:
+def _to_pil(src: str | bytes | os.PathLike | Any) -> Any:
     from PIL import Image
 
     if hasattr(src, "convert") and hasattr(src, "size"):
@@ -69,7 +70,7 @@ def _to_pil(src: Union[str, bytes, "os.PathLike", Any]) -> Any:
     return Image.open(os.fspath(src))
 
 
-def load(src: Union[str, bytes, "os.PathLike", Any]) -> LoadedImage:
+def load(src: str | bytes | os.PathLike | Any) -> LoadedImage:
     """Decode to ``(float32 RGB in [0,1], optional alpha, metadata)``."""
     try:
         im = _to_pil(src)
@@ -78,7 +79,7 @@ def load(src: Union[str, bytes, "os.PathLike", Any]) -> LoadedImage:
         raise ImageReadError(f"cannot decode image: {exc}") from exc
 
     original_mode = im.mode
-    info: Dict[str, Any] = dict(getattr(im, "info", {}) or {})
+    info: dict[str, Any] = dict(getattr(im, "info", {}) or {})
     icc = info.get("icc_profile")
     exif = info.get("exif")
 
@@ -121,7 +122,7 @@ def load(src: Union[str, bytes, "os.PathLike", Any]) -> LoadedImage:
 
 def _build_pil(
     rgb: np.ndarray,
-    alpha: Optional[np.ndarray],
+    alpha: np.ndarray | None,
     gray: bool,
 ) -> Any:
     from PIL import Image
@@ -140,7 +141,7 @@ def _build_pil(
     return Image.fromarray(u8, mode="RGB")
 
 
-def save_kwargs(fmt: str, quality: int) -> Dict[str, Any]:
+def save_kwargs(fmt: str, quality: int) -> dict[str, Any]:
     fmt = fmt.upper()
     if fmt == "JPEG":
         return {
@@ -162,11 +163,11 @@ def save_kwargs(fmt: str, quality: int) -> Dict[str, Any]:
 
 def encode(
     rgb: np.ndarray,
-    alpha: Optional[np.ndarray] = None,
+    alpha: np.ndarray | None = None,
     *,
     fmt: str = "PNG",
     quality: int = 95,
-    meta: Optional[ImageMeta] = None,
+    meta: ImageMeta | None = None,
     gray: bool = False,
     preserve_metadata: bool = True,
 ) -> bytes:
@@ -194,11 +195,11 @@ def encode(
 def save(
     path: str,
     rgb: np.ndarray,
-    alpha: Optional[np.ndarray] = None,
+    alpha: np.ndarray | None = None,
     *,
-    fmt: Optional[str] = None,
+    fmt: str | None = None,
     quality: int = 95,
-    meta: Optional[ImageMeta] = None,
+    meta: ImageMeta | None = None,
     gray: bool = False,
     preserve_metadata: bool = True,
 ) -> str:
@@ -223,15 +224,13 @@ def save(
             fh.write(blob)
         os.replace(tmp, target)
     except Exception as exc:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp)
-        except OSError:
-            pass
         raise ImageWriteError(f"cannot write {target}: {exc}") from exc
     return target
 
 
-def probe(src: Union[str, bytes, Any]) -> Dict[str, Any]:
+def probe(src: str | bytes | Any) -> dict[str, Any]:
     """Cheap header-only read, used to validate an upload before queueing it.
 
     Must never leak a Pillow exception: the HTTP layer maps

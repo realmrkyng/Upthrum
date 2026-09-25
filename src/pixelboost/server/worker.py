@@ -20,7 +20,7 @@ import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable
 
 log = logging.getLogger("pixelboost.server.worker")
 
@@ -30,20 +30,20 @@ class Job:
     id: str
     status: str = "queued"
     created_at: float = field(default_factory=time.time)
-    started_at: Optional[float] = None
-    finished_at: Optional[float] = None
+    started_at: float | None = None
+    finished_at: float | None = None
     filename: str = "input.png"
     output_format: str = "png"
-    options: Dict[str, Any] = field(default_factory=dict)
-    progress: Dict[str, int] = field(default_factory=lambda: {"done": 0, "total": 0})
-    result: Optional[bytes] = None
-    meta: Dict[str, Any] = field(default_factory=dict)
-    error: Optional[str] = None
-    error_type: Optional[str] = None
-    future: Optional[Future] = None
+    options: dict[str, Any] = field(default_factory=dict)
+    progress: dict[str, int] = field(default_factory=lambda: {"done": 0, "total": 0})
+    result: bytes | None = None
+    meta: dict[str, Any] = field(default_factory=dict)
+    error: str | None = None
+    error_type: str | None = None
+    future: Future | None = None
 
-    def as_dict(self, include_result: bool = False) -> Dict[str, Any]:
-        data: Dict[str, Any] = {
+    def as_dict(self, include_result: bool = False) -> dict[str, Any]:
+        data: dict[str, Any] = {
             "id": self.id,
             "status": self.status,
             "created_at": self.created_at,
@@ -65,7 +65,7 @@ class Job:
         return data
 
     @property
-    def elapsed_ms(self) -> Optional[float]:
+    def elapsed_ms(self) -> float | None:
         if self.started_at is None:
             return None
         end = self.finished_at or time.time()
@@ -79,11 +79,11 @@ class Job:
 class JobManager:
     def __init__(
         self,
-        handler: Callable[[bytes, Dict[str, Any], Callable[[int, int], None]], Any],
+        handler: Callable[[bytes, dict[str, Any], Callable[[int, int], None]], Any],
         workers: int = 2,
         queue_size: int = 64,
         ttl_seconds: int = 3600,
-        max_queued: Optional[int] = None,
+        max_queued: int | None = None,
     ) -> None:
         self.handler = handler
         self.workers = max(1, int(workers))
@@ -92,10 +92,10 @@ class JobManager:
         self.ttl_seconds = int(ttl_seconds)
         self._pool = ThreadPoolExecutor(max_workers=self.workers, thread_name_prefix="pb-worker")
         self._gate = threading.Semaphore(self.workers)
-        self._jobs: Dict[str, Job] = {}
+        self._jobs: dict[str, Job] = {}
         self._lock = threading.RLock()
 
-    def stats(self) -> Dict[str, int]:
+    def stats(self) -> dict[str, int]:
         with self._lock:
             active = sum(1 for j in self._jobs.values() if j.status in ("queued", "running"))
         return {
@@ -108,7 +108,7 @@ class JobManager:
     def submit(
         self,
         payload: bytes,
-        options: Dict[str, Any],
+        options: dict[str, Any],
         filename: str = "input.png",
         output_format: str = "png",
     ) -> Job:
@@ -151,7 +151,7 @@ class JobManager:
             finally:
                 job.finished_at = time.time()
 
-    def get(self, job_id: str) -> Optional[Job]:
+    def get(self, job_id: str) -> Job | None:
         with self._lock:
             return self._jobs.get(job_id)
 

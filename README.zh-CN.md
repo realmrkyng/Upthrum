@@ -5,7 +5,7 @@
 [![CI](https://github.com/your-org/pixelboost/actions/workflows/ci.yml/badge.svg)](https://github.com/your-org/pixelboost/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-94%20passing-brightgreen.svg)](tests)
+[![Tests](https://img.shields.io/badge/tests-176%20passing-brightgreen.svg)](tests)
 
 PixelBoost 能把图像放大并增强 2~8 倍。**同一份代码、同一个模型文件**，既能在几
 十块钱一个月的纯 CPU 小服务器上跑，也能跑在 CUDA GPU 上。
@@ -58,7 +58,7 @@ PixelBoost 按行带流式输出分块结果，峰值内存约为「一个 tile�
 
 | | |
 |---|---|
-| **后端** | classical（纯 numpy，无需模型）、ONNX Runtime、PyTorch |
+| **后端** | classical（纯 numpy，无需模型）、UPTHRUM（相位重建，无需模型）、ONNX Runtime、PyTorch |
 | **执行提供者** | CPU、CUDA、TensorRT、DirectML、CoreML、ROCm、OpenVINO |
 | **分块推理** | 流式累加器、余弦羽化拼接、显存不足自动缩小 tile |
 | **画质流水线** | 保边去噪 → 自动色阶 → 放大 → 色度降噪 → 引导滤波细节增强 → 可选 USM → 色彩调整 |
@@ -68,7 +68,7 @@ PixelBoost 按行带流式输出分块结果，峰值内存约为「一个 tile�
 | **接口** | CLI（单图 + 批量）、FastAPI 服务（同步 + 异步任务）、Python API |
 | **运维** | 原子写文件、结构化日志、`/healthz`、能力探测、API Key、上传体积限制 |
 | **部署** | 裸机、systemd 单元、nginx 配置、Docker（CPU + CUDA）、compose |
-| **测试** | 94 个测试，不联网、不需要模型文件，2 秒内跑完 |
+| **测试** | 176 个测试，不联网、不需要模型文件，几秒内跑完 |
 
 ---
 
@@ -287,6 +287,7 @@ with Engine() as engine:
               ┌─────────────────────────────────────────────────────────┐
               │ 后端（统一的 3 方法契约）                                  │
               │  classical  numpy Lanczos + 引导滤波      永远可用         │
+              │  upthrum    相位传输 + 拓扑约束           永远可用         │
               │  onnx       ORT: CPU/CUDA/TRT/DML/CoreML  一处导出多处跑   │
               │  torch      RRDBNet / SRVGGNetCompact     直接吃 .pth     │
               └────────────────────┬────────────────────────────────────┘
@@ -333,9 +334,115 @@ USM：`base = guided_filter(x, x)`，`detail = x - base`，`out = base + k·deta
 
 ---
 
+## UPTHRUM
+
+`upthrum` 不是又一组权重，而是**换了一个变量**。
+
+这个仓库里的每一个放大器——以及据我所知所有已发表的方法——估计的都是**强度**：
+给定粗格点上的采样值，去预测细格点上的取值。预测器可以换（固定核、回归网络、
+扩散模型），但目标都是「每个输出像素一个数」，失败方式也因此一样：从粗采样到
+细取值的映射不是单射，产生这些采样的高频结构本质上是不确定的。强度域方法只
+有两个选项——模糊（选最平滑的原像）或者幻觉（选一个看起来合理的原像）。这是
+结构性的，加参数只能在两者之间挪动，消灭不了这个岔路口。
+
+UPTHRUM 重建的是**相位**。
+
+```
+  第 k 个 log-Gabor 频带 ──▶ 单演信号三元组 (B, Rx, Ry)
+                       │
+                       ├─ 振幅      A = hypot(B, Rdir)
+                       ├─ 相位      φ = atan2(Rdir, B)          在 S¹ 上
+                       ├─ 取向      θ 由各频带倍角均值给出
+                       └─ 相位梯度 ∇φ  在单位相量上求导，永远不需要解卷绕
+                                  │
+                                  ▼
+  输出格点 ──▶ 在每个输出像素 q 处做相位传输
+               φ_out(q) = arg Σ_t  W_t · A_t^γ · exp( i (φ_t + g·∇φ_t·Δ_t) )
+               Δ_t = tap − q       g = phase_gain
+                                  │
+                                  ├─ κ = |Σ W exp(iφ)| / Σ W   相干门，∈ [0,1]
+                                  └─ 振幅来自结构对齐的各向异性核
+                                  │
+                                  ▼
+  拓扑 ──▶ 子集复形的 0 维持续同调
+           消去低于 τ = 0.18·(p99 − p1) 的临界点
+           恢复被传输抹掉的源峰（以源为上界）
+                                  │
+                                  ▼
+  强度 ──▶ cos(φ_out) · A_out · κ^0.5  ⊕  未动的低通  →  RGB
+```
+
+因为沿波前的平移**就是**一次相位移动，结构的亚像素位置由相位场**决定**，而不是
+猜出来的。又因为相位是按单位向量求均值、强度是按标量求均值，插值模糊的根源
+——反相样本的互相抵消——从一开始就不会发生。拓扑阶段则防止重建把噪声提升成
+「看起来像纹理」的东西：合成出来的细节，不允许携带源里不存在的显著临界点。
+
+五条性质，每一条都是 `tests/test_upthrum.py` 里的一个测试：
+
+| 性质 | 含义 | 实测 |
+|---|---|---|
+| scale 1 恒等 | 传输退化为重合采样 | 最大误差 `1.8e-07`（float32 下限） |
+| Nyquist 无衰减 | 频带中心正弦以单位增益传输 | `1.08e-05`，丢掉相位项会差 2600 倍 |
+| 内禀各向异性 | 阶跃边缘重建为阶跃 | 边缘宽 2 px，Lanczos 是 8 px，且无过冲 |
+| 拓扑不变性 | 不显著临界点无法被提升 | 干净图 79 → 79；σ=0.03 噪声 2575 → 79 |
+| DC 保持 | 低通路分毫未动 | 收缩路径上 `< 1e-6` |
+
+什么内容用它：文字、UI、线稿、技术图纸、扫描文档——任何 GAN 会「编」出结构
+的源。在这些内容上 `realesrgan-x4plus-anime` 往往比两个免模型后端都差，因为它
+会画出文件里并不存在的纹理。
+
+```bash
+# 4 倍，默认参数
+pixelboost upscale ui.png -o ui_4x.png --backend upthrum --scale 4
+
+# 任意倍率，包括小数 —— 2.5 倍、指定宽度、指定最长边
+pixelboost upscale ui.png -o ui_2_5x.png --backend upthrum --scale 2.5
+pixelboost upscale ui.png -o ui_2400.png --backend upthrum --width 2400
+
+# 默认 3 个频带；细纹理与平坦区并存的内容可以加到 5
+pixelboost upscale ui.png -o out.png --backend upthrum --upthrum-bands 5
+
+# GPU：只要装了 CUDA 版 torch，FFT 分析部分就上 GPU
+pixelboost upscale ui.png -o out.png --backend upthrum --upthrum-device cuda
+```
+
+```python
+from pixelboost import enhance
+
+result, path = enhance("ui.png", "ui_4x.png", backend="upthrum", scale=4)
+print(result.summary())
+# {'backend': 'upthrum', 'model': None, 'provider': 'cpu', ...}
+```
+
+**代价。** 同倍率下约为 classical 后端的 4-5 倍，随 `--upthrum-bands` 接近线性。
+`--backend auto` **永远不会**选中它：它慢好几倍，而且两个免模型后端性格不同，
+这个选择应该由运维做，而不是启发式。见[性能参考](#性能参考)。
+
+**不分块。** 频带分析是非局部的——log-Gabor 滤波定义在整张二维频谱上，把输入
+切块等于在每个频带上穿一条缝。所以 UPTHRUM 做整图分析、按行块流式输出。内存
+随输入面积增长，与 `--tile` 无关，真正起作用的保护是 `--max-pixels`。拿它处理
+5000 万像素的扫描件之前，先把这几个数调好。
+
+**零学习参数、零下载。** `pixelboost capabilities` 对这个后端报告
+`"learned_parameters": 0`，这不是修辞：整个方法就是 `upthrum/transport.py` 里
+那点算术加上 `upthrum/topology.py` 里的约束。没有 `models download`，没有 ONNX
+导出，也不存在「同一版本的两个安装行为不一致」这回事。
+
+**参数。** `--upthrum-bands`、`--upthrum-top-frequency`、`--upthrum-phase-gain`、
+`--upthrum-persistence`、`--upthrum-coherence-power`、`--upthrum-anisotropy`、
+`--upthrum-detail`、`--upthrum-device`、`--no-upthrum-topology`、
+`--no-upthrum-chroma`。每个都对应上面公式里的一项；
+[docs/TUNING.md](docs/TUNING.md) 说明对应哪一项、动了会怎样。它们也都能写进
+配置文件的 `upthrum:` 块，或者 `EnhanceOptions(extra={"upthrum": {...}})`。
+
+完整推导、两条被不变量抓住的 bug、以及标定表：
+[docs/UPTHRUM.md](docs/UPTHRUM.md)。
+
+---
+
 ## 模型
 
-内置 5 个条目，实际只需要下载一个就能开始：
+内置 5 个 Real-ESRGAN 条目，外加两个零下载的免模型后端：
 
 | 名称 | 倍率 | 参数量 | 适用 |
 |---|---|---|---|
@@ -345,6 +452,7 @@ USM：`base = guided_filter(x, x)`，`detail = x - base`，`out = base + k·deta
 | `realesr-general-wdn-x4v3` | 4 | 1.2 M | 高压缩 / 噪点源图 |
 | `realesr-animevideov3` | 4 | 2.4 M | 视频帧，延迟最低 |
 | `classical` | 任意 | 0 | 文字、UI、截图 —— 零下载 |
+| `upthrum` | 任意 | 0 | 文字、UI、线稿 —— 相位重建，零下载 |
 
 ```bash
 pixelboost models
@@ -378,6 +486,34 @@ x4plus 上 CPU 和 GPU 差 30~100 倍。这不是调参能解决的：要么上 
 
 选型与内存占用表：[docs/DEPLOY.md 第 0 节](docs/DEPLOY.md#0-sizing-the-host)
 
+### UPTHRUM 的代价
+
+在开发机（12 逻辑核、numpy FFT、无 BLAS 多线程）上实测，给出的是**相对
+classical 同倍率的倍数**——绝对值不会和你的机器一致，但这个倍率在几台机器上
+都稳定。
+
+| 场景 | 相对 classical 4x | 说明 |
+|---|---|---|
+| `upthrum`，2x | ~1.2x | 最便宜的可用档位 |
+| `upthrum`，4x | ~4.6x | 默认 |
+| `upthrum`，4x，1 频带 | ~3.3x | 成本随 `--upthrum-bands` 接近线性 |
+| `upthrum`，4x，5 频带 | ~5.8x | |
+| `upthrum`，2x，关拓扑 | ~0.6x | 见下 |
+
+两个主导项，都有参数兜底，而不是随图像尺寸失控：
+
+* **scale 2 下拓扑约束占一半以上运行时间**（同一张图同一倍率：开着 5.96 s，
+  关掉 2.88 s）。合并树是不等长的 union-find，内层循环天生串行，而且是 Python。
+  它由 `topology_max_pixels`（默认 65536）封顶：更大的输入做块最大值池化，极大值
+  完整保留，只有块内尺度上的细节对分析不可见——而那正是阈值本来就要忽略的尺度。
+  把这个阶段关掉，UPTHRUM 就退化成一个很好的插值器，所以
+  `--no-upthrum-topology` 应当被当作消融实验开关，而不是性能开关。
+* **传输是 O(输出像素数)**，每像素一次固定 gather，所以 4x 的代价约是 2x 的
+  4 倍而不是 2 倍。
+
+装了 CUDA 版 torch 可以把 FFT 分析搬上 GPU（`--upthrum-device cuda`）；传输和
+拓扑仍在 CPU 上，所以提速是真的，但远达不到编译好的网络那种 30~100 倍。
+
 ---
 
 ## 文档
@@ -388,6 +524,7 @@ x4plus 上 CPU 和 GPU 差 30~100 倍。这不是调参能解决的：要么上 
 | [docs/DEPLOY.md](docs/DEPLOY.md) | 安装、CUDA/cuDNN 匹配、systemd、nginx、Docker、Windows、上线检查清单、故障排查 |
 | [docs/TUNING.md](docs/TUNING.md) | 逐个参数的取舍、分题材配方、画质问题诊断 |
 | [docs/MODELS.md](docs/MODELS.md) | 模型清单、选择指南、ONNX 导出、接入自己的模型 |
+| [docs/UPTHRUM.md](docs/UPTHRUM.md) | UPTHRUM 推导、被不变量抓住的 bug、标定表 |
 | [docs/API.md](docs/API.md) | HTTP 接口参考、错误码、客户端示例 |
 
 ---
@@ -396,7 +533,7 @@ x4plus 上 CPU 和 GPU 差 30~100 倍。这不是调参能解决的：要么上 
 
 ```bash
 make install-dev
-make test          # 94 个测试，2 秒内，不联网
+make test          # 176 个测试，几秒内，不联网
 make lint
 make benchmark
 ```

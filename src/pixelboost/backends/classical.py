@@ -16,7 +16,7 @@ The pipeline is a compressed version of what production resamplers do:
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 import numpy as np
 
@@ -27,12 +27,13 @@ from pixelboost.backends.base import Backend
 class ClassicalBackend(Backend):
     name = "classical"
     requires_tiling = False
+    handles_detail = True
     device = "cpu"
 
     def __init__(
         self,
-        model: Optional[str] = None,
-        provider: Optional[str] = None,
+        model: str | None = None,
+        provider: str | None = None,
         *,
         max_step_ratio: float = 2.0,
         detail: float = 0.35,
@@ -73,7 +74,7 @@ class ClassicalBackend(Backend):
             )
         return out
 
-    def info(self) -> Dict[str, Any]:
+    def info(self) -> dict[str, Any]:
         data = super().info()
         data.update(
             {
@@ -101,7 +102,7 @@ class NearestBackend(Backend):
         xi = np.minimum((np.arange(out_w) * w // out_w), w - 1)
         return tile[yi][:, xi]
 
-    def info(self) -> Dict[str, Any]:
+    def info(self) -> dict[str, Any]:
         data = super().info()
         data["note"] = "pixel-art only; no interpolation"
         return data

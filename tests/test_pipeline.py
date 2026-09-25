@@ -5,6 +5,7 @@ from pixelboost import imageio
 from pixelboost.backends.classical import ClassicalBackend, NearestBackend
 from pixelboost.config import Config
 from pixelboost.engine import Engine
+from pixelboost.errors import ImageReadError, OutOfMemory
 from pixelboost.pipeline import Pipeline
 from pixelboost.types import EnhanceOptions, resolve_target
 
@@ -111,7 +112,7 @@ def test_pipeline_clamps_to_max_pixels():
 def test_pipeline_memory_guard():
     backend = ClassicalBackend()
     pipeline = Pipeline(backend, EnhanceOptions(scale=4.0), 1000, 1000)
-    with pytest.raises(Exception):
+    with pytest.raises(OutOfMemory):
         pipeline.guard_memory(1_000_000)
 
 
@@ -223,7 +224,7 @@ def test_imageio_probe():
 
 
 def test_imageio_rejects_garbage():
-    with pytest.raises(Exception):
+    with pytest.raises(ImageReadError):
         imageio.load(b"not an image at all")
 
 

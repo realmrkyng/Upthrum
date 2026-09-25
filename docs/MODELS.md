@@ -13,6 +13,7 @@ script, CLI, HTTP capability endpoint and backend factory all read from it.
 | `realesr-general-wdn-x4v3` | 4 | 1.2 M | SRVGG x32 | JPEG-compressed / noisy sources |
 | `realesr-animevideov3` | 4 | 2.4 M | SRVGG x16 | video frames, lowest latency |
 | `classical` | any | 0 | none | text, screenshots, always-available fallback |
+| `upthrum` | any | 0 | none | text, UI, line art — phase reconstruction, no download |
 
 All Real-ESRGAN weights are BSD-3-Clause. PixelBoost ships none of them; they are
 downloaded on demand into `~/.cache/pixelboost/models`.
@@ -21,14 +22,19 @@ downloaded on demand into `~/.cache/pixelboost/models`.
 
 ```
 Is the source text, a screenshot, UI or flat line art?
-  └─ yes -> classical
-             (a GAN will invent texture, thicken strokes and melt 12pt glyphs)
+  └─ yes -> upthrum if you can afford 4-6x the classical runtime
+         -> classical otherwise
+         (a GAN will invent texture, thicken strokes and melt 12pt glyphs;
+          both model-free backends will not, and upthrum keeps edges hard
+          rather than merely smooth)
 
 Is the source anime / illustration?
   └─ yes -> realesrgan-x4plus-anime
 
 Is it a photograph with visible JPEG blocking or sensor noise?
   └─ yes -> realesr-general-wdn-x4v3
+         (upthrum also tolerates noise, but by refusing to amplify it,
+          not by removing it — pair it with --denoise if the source is dirty)
 
 Do you need throughput on CPU, or sub-second latency?
   └─ yes -> realesr-general-x4v3
@@ -36,6 +42,14 @@ Do you need throughput on CPU, or sub-second latency?
 Anything else (the default)
   └─ realesrgan-x4plus
 ```
+
+`classical` vs `upthrum` on the same text source: classical is a very good
+resampler, so edges land where the kernel puts them and are softened by the
+kernel's width. UPTHRUM transports the phase, so a step edge stays a step and
+the sub-pixel position is determined rather than kernel-interpolated — measured
+edge width 2 px against Lanczos' 8 px, with no overshoot. It costs 4–6x the
+runtime, and it is never chosen by `auto`. See
+[README.md § UPTHRUM](../README.md#upthrum).
 
 ## Downloading
 

@@ -14,11 +14,14 @@ forking -- which matters because forking after CUDA initialisation is invalid.
 
 from __future__ import annotations
 
+import contextlib
+import json
 import logging
 import os
 import threading
 import time
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
+from collections.abc import Iterable
+from typing import Any, Callable, Union
 
 import numpy as np
 
@@ -38,10 +41,10 @@ ImageInput = Union[str, bytes, "os.PathLike", Any, np.ndarray]
 class Engine:
     """Loads configuration, caches backends, runs pipelines."""
 
-    def __init__(self, config: Optional[Config] = None, warmup: Optional[bool] = None) -> None:
+    def __init__(self, config: Config | None = None, warmup: bool | None = None) -> None:
         self.config = config or load_config()
         self._lock = threading.RLock()
-        self._backends: Dict[Tuple[str, str, str, bool], Backend] = {}
+        self._backends: dict[tuple[str, str, str, bool, str], Backend] = {}
         self._warmup_done: set = set()
         self.warmup_enabled = self.config.warmup if warmup is None else bool(warmup)
 
@@ -49,12 +52,15 @@ class Engine:
     def models_dir(self) -> str:
         return self.config.models_dir
 
-    def _cache_key(self, name: str, spec: ModelSpec, opts: EnhanceOptions) -> Tuple[str, str, str, bool]:
+    def _cache_key(
+        self, name: str, spec: ModelSpec, opts: EnhanceOptions
+    ) -> tuple[str, str, str, bool, str]:
         return (
             name,
             opts.model_path or spec.name,
             str(opts.provider or self.config.provider or "auto"),
             bool(opts.fp16 or self.config.fp16),
+            json.dumps(opts.extra or {}, sort_keys=True, default=str),
         )
 
     def backend_for(self, opts: EnhanceOptions, force_new: bool = False) -> Backend:
@@ -84,14 +90,12 @@ class Engine:
     def close(self) -> None:
         with self._lock:
             for backend in self._backends.values():
-                try:
+                with contextlib.suppress(Exception):
                     backend.close()
-                except Exception:
-                    pass
             self._backends.clear()
             self._warmup_done.clear()
 
-    def __enter__(self) -> "Engine":
+    def __enter__(self) -> Engine:
         return self
 
     def __exit__(self, *exc: Any) -> None:
@@ -100,9 +104,9 @@ class Engine:
     def enhance(
         self,
         src: ImageInput,
-        opts: Optional[EnhanceOptions] = None,
-        on_progress: Optional[Callable[[int, int], None]] = None,
-        backend: Optional[Backend] = None,
+        opts: EnhanceOptions | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
+        backend: Backend | None = None,
     ) -> EnhanceResult:
         """Enhance one image. ``src`` may be a path, bytes, PIL image or RGB array."""
         options = opts or self.config.defaults
@@ -110,21 +114,20 @@ class Engine:
 
         if isinstance(src, np.ndarray):
             if src.ndim == 2:
+                # Greyscale input is promoted to a 3-channel luma stack; the
+                # grey-ness is not tracked further, so output is RGB.
                 rgb = np.repeat(src[..., None].astype(np.float32), 3, axis=2)
                 alpha = None
-                gray = True
             else:
                 rgb = src.astype(np.float32)
                 if rgb.dtype == np.uint8:
                     rgb = rgb / 255.0
                 alpha = None
-                gray = rgb.shape[2] == 1
             meta = ImageMeta(width=rgb.shape[1], height=rgb.shape[0], mode="RGB")
         else:
             loaded = imageio.load(src)
-            rgb, alpha, meta, gray = loaded.rgb, loaded.alpha, loaded.meta, loaded.gray
+            rgb, alpha, meta, _gray = loaded.rgb, loaded.alpha, loaded.meta, loaded.gray
 
-        spec = self.config.resolve_model(options.model or self.config.model)
         be = backend or self.backend_for(options)
 
         pipeline = Pipeline(be, options, rgb.shape[1], rgb.shape[0])
@@ -136,7 +139,7 @@ class Engine:
             alpha=out_alpha,
             meta=meta,
             backend=be.name,
-            model=spec.name,
+            model=be.model,
             provider=be.provider,
             src_size=(rgb.shape[1], rgb.shape[0]),
             dst_size=(out_rgb.shape[1], out_rgb.shape[0]),
@@ -148,10 +151,10 @@ class Engine:
     def enhance_file(
         self,
         src: ImageInput,
-        dst: Optional[str] = None,
-        opts: Optional[EnhanceOptions] = None,
-        on_progress: Optional[Callable[[int, int], None]] = None,
-    ) -> Tuple[EnhanceResult, Optional[str]]:
+        dst: str | None = None,
+        opts: EnhanceOptions | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> tuple[EnhanceResult, str | None]:
         """Enhance and write to ``dst``. Returns ``(result, written_path)``."""
         options = opts or self.config.defaults
         result = self.enhance(src, options, on_progress)
@@ -176,7 +179,7 @@ class Engine:
         )
         return result, written
 
-    def enhance_bytes(self, data: bytes, opts: Optional[EnhanceOptions] = None) -> Tuple[bytes, EnhanceResult]:
+    def enhance_bytes(self, data: bytes, opts: EnhanceOptions | None = None) -> tuple[bytes, EnhanceResult]:
         options = opts or self.config.defaults
         result = self.enhance(data, options)
         fmt = options.output_format or (result.meta.format if result.meta else "PNG")
@@ -196,19 +199,21 @@ class Engine:
         self,
         paths: Iterable[str],
         out_dir: str,
-        opts: Optional[EnhanceOptions] = None,
+        opts: EnhanceOptions | None = None,
         suffix: str = "_upscaled",
         skip_existing: bool = True,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         options = opts or self.config.defaults
         os.makedirs(out_dir, exist_ok=True)
-        backend = self.backend_for(options)
-        reports: List[Dict[str, Any]] = []
+        # Load and cache the backend up front so the first file does not pay
+        # for model loading; enhance() would resolve the same instance anyway.
+        self.backend_for(options)
+        reports: list[dict[str, Any]] = []
 
         for path in paths:
             stem, ext = os.path.splitext(os.path.basename(path))
             target = os.path.join(out_dir, f"{stem}{suffix}{ext}")
-            entry: Dict[str, Any] = {"input": path, "output": target}
+            entry: dict[str, Any] = {"input": path, "output": target}
             if skip_existing and os.path.exists(target):
                 entry["status"] = "skipped"
                 reports.append(entry)
@@ -229,7 +234,7 @@ class Engine:
             )
         return reports
 
-    def capabilities(self) -> Dict[str, Any]:
+    def capabilities(self) -> dict[str, Any]:
         data = backend_capabilities(self.config)
         data["config"] = {
             "models_dir": self.config.models_dir,
@@ -240,16 +245,16 @@ class Engine:
         return data
 
 
-def open_image(path: str) -> Dict[str, Any]:
+def open_image(path: str) -> dict[str, Any]:
     return imageio.probe(path)
 
 
 def enhance(
     src: ImageInput,
-    dst: Optional[str] = None,
-    config: Optional[Config] = None,
+    dst: str | None = None,
+    config: Config | None = None,
     **option_overrides: Any,
-) -> Tuple[EnhanceResult, Optional[str]]:
+) -> tuple[EnhanceResult, str | None]:
     """One-shot functional API::
 
         from pixelboost import enhance

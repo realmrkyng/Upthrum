@@ -13,8 +13,9 @@ else.
 
 from __future__ import annotations
 
+import contextlib
 import os
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 import numpy as np
 
@@ -174,7 +175,7 @@ def build_model(arch: str, scale: int = 4, num_block: int = 23, num_feat: int = 
     )
 
 
-def load_state_dict(path: str) -> Dict[str, Any]:
+def load_state_dict(path: str) -> dict[str, Any]:
     torch, _, _ = _torch()
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
     for key in ("params_ema", "params", "state_dict", "model"):
@@ -195,15 +196,15 @@ class TorchBackend(Backend):
     def __init__(
         self,
         model_path: str,
-        provider: Optional[str] = None,
+        provider: str | None = None,
         *,
         native_scale: int = 4,
         num_block: int = 23,
         num_feat: int = 64,
         num_grow_ch: int = 32,
         fp16: bool = False,
-        model_name: Optional[str] = None,
-        device: Optional[str] = None,
+        model_name: str | None = None,
+        device: str | None = None,
         align: int = 8,
         arch: str = "rrdb",
         num_conv: int = 32,
@@ -224,9 +225,9 @@ class TorchBackend(Backend):
             device = "cpu"
         if device != "cpu" and not torch.cuda.is_available():
             raise BackendUnavailable(
-                f"CUDA was requested but torch.cuda.is_available() is False. "
-                f"Check the driver (`nvidia-smi`) and that you installed a "
-                f"CUDA-enabled torch wheel, not the default CPU one."
+                "CUDA was requested but torch.cuda.is_available() is False. "
+                "Check the driver (`nvidia-smi`) and that you installed a "
+                "CUDA-enabled torch wheel, not the default CPU one."
             )
 
         self.model_path = model_path
@@ -281,7 +282,7 @@ class TorchBackend(Backend):
         if self.device == "cuda":
             self._torch.cuda.synchronize()
 
-    def info(self) -> Dict[str, Any]:
+    def info(self) -> dict[str, Any]:
         data = super().info()
         torch = self._torch
         data.update(
@@ -298,10 +299,8 @@ class TorchBackend(Backend):
         return data
 
     def close(self) -> None:
-        try:
+        with contextlib.suppress(Exception):
             self.net.cpu()
-        except Exception:
-            pass
         self.net = None  # type: ignore[assignment]
         if self.device == "cuda":
             self._torch.cuda.empty_cache()

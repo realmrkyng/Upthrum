@@ -9,6 +9,13 @@
 3. **classical** -- always available, no download. Used as the silent fallback
    so that a broken install degrades in quality instead of returning a 500.
 
+**upthrum** is never chosen by ``auto``. It is always available and needs no
+model, but it is several times slower than ``classical`` per megapixel and the
+two have genuinely different characters -- phase reconstruction holds text and
+line art far better, while a GAN model wins on texture-heavy photographs. That
+is an editorial decision, so it is left to the operator via ``--backend
+upthrum`` rather than guessed at.
+
 Overriding to a specific backend is respected literally and raises on failure;
 that is what you want when you are deliberately benchmarking CUDA.
 """
@@ -17,7 +24,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pixelboost.backends.base import Backend
 from pixelboost.backends.classical import ClassicalBackend, NearestBackend
@@ -26,15 +33,16 @@ from pixelboost.backends.onnx_backend import (
     available_providers,
     has_gpu,
     normalize_provider,
-    provider_name,
     resolve_providers,
 )
 from pixelboost.backends.torch_backend import TorchBackend
+from pixelboost.backends.upthrum_backend import UpthrumBackend
 from pixelboost.config import CLASSICAL_MODEL, Config, ModelSpec
 from pixelboost.errors import BackendUnavailable, ModelNotFound
 from pixelboost.types import EnhanceOptions
+from pixelboost.upthrum import UpthrumParams
 
-BACKEND_NAMES = ("auto", "onnx", "torch", "classical", "nearest")
+BACKEND_NAMES = ("auto", "onnx", "torch", "classical", "upthrum", "nearest")
 
 __all__ = [
     "BACKEND_NAMES",
@@ -43,10 +51,12 @@ __all__ = [
     "NearestBackend",
     "OnnxBackend",
     "TorchBackend",
+    "UpthrumBackend",
     "available_providers",
     "backend_capabilities",
     "create_backend",
     "describe_environment",
+    "describe_upthrum_environment",
     "has_gpu",
     "normalize_provider",
     "onnx_available",
@@ -54,6 +64,8 @@ __all__ = [
     "resolve_backend_name",
     "resolve_providers",
     "torch_available",
+    "upthrum_available",
+    "upthrum_params_from",
 ]
 
 
@@ -74,7 +86,33 @@ def torch_available() -> bool:
     return _has_module("torch")
 
 
-def onnx_path_for(cfg: Config, spec: ModelSpec) -> Optional[str]:
+def upthrum_available() -> bool:
+    """UPTHRUM needs nothing but numpy, which the package already requires.
+
+    Kept as a function rather than a constant so that a partial vendoring or a
+    namespace-package install is reported honestly instead of assumed away. An
+    optional CUDA build of torch makes it faster; its absence is never a reason
+    for this to be False.
+    """
+    return _has_module("pixelboost.upthrum")
+
+
+def upthrum_params_from(opts: EnhanceOptions) -> dict[str, Any]:
+    """Extract UPTHRUM overrides from ``opts.extra``.
+
+    The knobs live under ``extra["upthrum"]`` so that :class:`EnhanceOptions`
+    does not have to grow a field per algorithm parameter -- the dataclass stays
+    a description of the *pipeline*, and algorithm-specific settings travel in
+    the documented escape hatch. Unknown keys are dropped by
+    :meth:`UpthrumParams.from_dict`, so a stale flag in a config file degrades
+    to "ignored" instead of a TypeError.
+    """
+    extra = getattr(opts, "extra", None) or {}
+    block = extra.get("upthrum") if isinstance(extra, dict) else None
+    return dict(block) if isinstance(block, dict) else {}
+
+
+def onnx_path_for(cfg: Config, spec: ModelSpec) -> str | None:
     """Locate an ``.onnx`` sibling for a registry entry."""
     if spec.kind == "onnx":
         candidate = os.path.join(cfg.models_dir, spec.filename)
@@ -91,7 +129,7 @@ def onnx_path_for(cfg: Config, spec: ModelSpec) -> Optional[str]:
     return None
 
 
-def torch_path_for(cfg: Config, spec: ModelSpec) -> Optional[str]:
+def torch_path_for(cfg: Config, spec: ModelSpec) -> str | None:
     if spec.kind not in ("pth", "pt", "ckpt"):
         return None
     candidate = os.path.join(cfg.models_dir, spec.filename)
@@ -140,6 +178,14 @@ def create_backend(cfg: Config, opts: EnhanceOptions) -> Backend:
     if name == "nearest":
         return NearestBackend()
 
+    if name == "upthrum":
+        overrides = upthrum_params_from(opts)
+        device = overrides.pop("device", None) or opts.provider or "auto"
+        return UpthrumBackend(
+            params=UpthrumParams.from_dict(overrides) if overrides else None,
+            device=device,
+        )
+
     if name == "onnx":
         path = opts.model_path or onnx_path_for(cfg, spec)
         if not path or not os.path.isfile(path):
@@ -180,12 +226,12 @@ def create_backend(cfg: Config, opts: EnhanceOptions) -> Backend:
     raise BackendUnavailable(f"unhandled backend {name!r}")
 
 
-def backend_capabilities(cfg: Optional[Config] = None) -> Dict[str, Any]:
+def backend_capabilities(cfg: Config | None = None) -> dict[str, Any]:
     """Everything the ``/v1/capabilities`` endpoint reports."""
     providers = available_providers()
     from pixelboost.config import MODEL_REGISTRY
 
-    models: List[Dict[str, Any]] = []
+    models: list[dict[str, Any]] = []
     for spec in MODEL_REGISTRY.values():
         entry = {
             "name": spec.name,
@@ -206,21 +252,69 @@ def backend_capabilities(cfg: Optional[Config] = None) -> Dict[str, Any]:
         backends.append("onnx")
     if torch_available():
         backends.append("torch")
+    if upthrum_available():
+        backends.append("upthrum")
 
     return {
         "backends": backends,
         "onnxruntime": onnx_available(),
         "torch": torch_available(),
+        "upthrum": upthrum_available(),
+        "methods": _method_descriptions(),
         "providers": providers,
         "gpu": has_gpu(),
         "models": models,
     }
 
 
+def _method_descriptions() -> list[dict[str, Any]]:
+    """Static description of the model-free methods, for ``/v1/capabilities``.
+
+    A caller that wants to pick a backend needs to know what the choice means,
+    not just that the name exists. This is where the difference between
+    ``classical`` (Lanczos plus a guided lift) and ``upthrum`` (phase
+    reconstruction with a topological constraint) is stated in a form an API
+    consumer can read.
+    """
+    from pixelboost.upthrum import describe as describe_upthrum
+
+    return [
+        {
+            "backend": "classical",
+            "family": "resampling",
+            "variable": "intensity",
+            "learned_parameters": 0,
+            "needs_model_file": False,
+        },
+        {
+            "backend": "upthrum",
+            "needs_model_file": False,
+            **describe_upthrum(),
+        },
+        {
+            "backend": "nearest",
+            "family": "resampling",
+            "variable": "intensity",
+            "learned_parameters": 0,
+            "needs_model_file": False,
+        },
+    ]
+
+
+def describe_upthrum_environment() -> str:
+    """One line about how UPTHRUM will actually run on this machine."""
+    if not upthrum_available():
+        return "upthrum     : unavailable"
+    from pixelboost.upthrum import resolve_device
+
+    return f"upthrum     : yes (device={resolve_device('auto')})"
+
+
 def describe_environment() -> str:
     lines = [
         f"onnxruntime : {'yes' if onnx_available() else 'no'}",
         f"torch       : {'yes' if torch_available() else 'no'}",
+        describe_upthrum_environment(),
         f"providers   : {', '.join(available_providers()) or '(none)'}",
         f"gpu         : {'yes' if has_gpu() else 'no'}",
     ]

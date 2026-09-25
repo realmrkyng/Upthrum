@@ -19,7 +19,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 
-from pixelboost.config import MODEL_REGISTRY, load_config  # noqa: E402
+from pixelboost.config import load_config  # noqa: E402
 from pixelboost.errors import PixelBoostError  # noqa: E402
 from pixelboost.models import ensure_model, export_onnx  # noqa: E402
 
@@ -74,8 +74,8 @@ def main() -> int:
 
     size = os.path.getsize(out)
     print(f"wrote {out} ({size / 1e6:.1f} MB)")
-    print(f"verify: python -c \"from pixelboost.backends.onnx_backend import available_providers; "
-          f"print(available_providers())\"")
+    print("verify: python -c \"from pixelboost.backends.onnx_backend import available_providers; "
+          "print(available_providers())\"")
     print(f"run   : pixelboost upscale in.jpg -o out.png --model-path {out} --scale {spec.scale}")
     if not args.static:
         print("note  : dynamic axes exported -- the tiler may use any tile size")

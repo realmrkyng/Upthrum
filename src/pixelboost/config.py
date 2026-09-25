@@ -19,7 +19,7 @@ import json
 import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pixelboost.errors import ConfigError
 from pixelboost.types import EnhanceOptions
@@ -44,8 +44,8 @@ class ModelSpec:
     scale: int
     filename: str
     arch: str = "rrdb"
-    url: Optional[str] = None
-    sha256: Optional[str] = None
+    url: str | None = None
+    sha256: str | None = None
     num_block: int = 23
     num_feat: int = 64
     num_conv: int = 32
@@ -54,7 +54,7 @@ class ModelSpec:
     tags: tuple = ()
 
 
-MODEL_REGISTRY: Dict[str, ModelSpec] = {
+MODEL_REGISTRY: dict[str, ModelSpec] = {
     "realesrgan-x4plus": ModelSpec(
         name="realesrgan-x4plus",
         kind="pth",
@@ -138,8 +138,8 @@ class ServerConfig:
     port: int = 8000
     workers: int = 2
     queue_size: int = 64
-    api_keys: List[str] = field(default_factory=list)
-    cors_origins: List[str] = field(default_factory=lambda: ["*"])
+    api_keys: list[str] = field(default_factory=list)
+    cors_origins: list[str] = field(default_factory=lambda: ["*"])
     max_upload_mb: int = 32
     job_ttl_seconds: int = 3600
     keep_alive: int = 30
@@ -154,7 +154,7 @@ class Config:
     models_dir: str = field(default_factory=default_models_dir)
     backend: str = "auto"
     model: str = "realesrgan-x4plus"
-    provider: Optional[str] = None
+    provider: str | None = None
     fallback_model: str = "realesr-general-x4v3"
     fp16: bool = False
     threads: int = 0
@@ -170,7 +170,7 @@ class Config:
     def model_path(self, spec: ModelSpec) -> str:
         return os.path.join(self.models_dir, spec.filename)
 
-    def resolve_model(self, name: Optional[str]) -> ModelSpec:
+    def resolve_model(self, name: str | None) -> ModelSpec:
         key = (name or self.model or "realesrgan-x4plus").strip()
         if key == CLASSICAL_MODEL:
             return ModelSpec(
@@ -201,15 +201,15 @@ class Config:
             )
         return spec
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: Optional[Dict[str, Any]]) -> "Config":
+    def from_dict(cls, data: dict[str, Any] | None) -> Config:
         data = dict(data or {})
         defaults = data.pop("defaults", None) or data.pop("enhance", None)
         server = data.pop("server", None)
-        known = {f for f in cls.__dataclass_fields__}  # type: ignore[attr-defined]
+        known = set(cls.__dataclass_fields__)  # type: ignore[attr-defined]
         unknown = {k: v for k, v in data.items() if k not in known}
         if unknown:
             raise ConfigError(f"unknown config keys: {sorted(unknown)}")
@@ -220,7 +220,7 @@ class Config:
         return cfg
 
 
-def _read_file(path: str) -> Dict[str, Any]:
+def _read_file(path: str) -> dict[str, Any]:
     suffix = Path(path).suffix.lower()
     text = Path(path).read_text(encoding="utf-8")
     if suffix in (".yaml", ".yml"):
@@ -239,7 +239,7 @@ def _read_file(path: str) -> Dict[str, Any]:
     return json.loads(text)
 
 
-def discover_config(explicit: Optional[str] = None) -> Optional[str]:
+def discover_config(explicit: str | None = None) -> str | None:
     if explicit:
         if not os.path.isfile(explicit):
             raise ConfigError(f"config file not found: {explicit}")
@@ -262,7 +262,7 @@ def discover_config(explicit: Optional[str] = None) -> Optional[str]:
     return None
 
 
-def load_config(path: Optional[str] = None) -> Config:
+def load_config(path: str | None = None) -> Config:
     resolved = discover_config(path)
     if not resolved:
         return Config()

@@ -14,13 +14,13 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Tuple
+from typing import Callable
 
 import numpy as np
 
 from pixelboost.errors import OutOfMemory
 
-TileRect = Tuple[int, int, int, int]
+TileRect = tuple[int, int, int, int]
 
 
 class _ReflectPad(np.ndarray):
@@ -34,7 +34,7 @@ class TileStats:
     retries: int = 0
 
 
-def axis_ranges(total: int, tile: int, overlap: int) -> List[Tuple[int, int]]:
+def axis_ranges(total: int, tile: int, overlap: int) -> list[tuple[int, int]]:
     """Split one axis into overlapping windows covering ``[0, total)``.
 
     The last window is clamped to the far edge, so the stride is uneven by at
@@ -46,7 +46,7 @@ def axis_ranges(total: int, tile: int, overlap: int) -> List[Tuple[int, int]]:
     overlap = max(0, min(overlap, tile // 2))
     stride = max(1, tile - 2 * overlap)
 
-    ranges: List[Tuple[int, int]] = []
+    ranges: list[tuple[int, int]] = []
     pos = 0
     while True:
         end = min(pos + tile, total)
@@ -60,7 +60,7 @@ def axis_ranges(total: int, tile: int, overlap: int) -> List[Tuple[int, int]]:
     return ranges
 
 
-def plan_tiles(h: int, w: int, tile: int, overlap: int) -> List[TileRect]:
+def plan_tiles(h: int, w: int, tile: int, overlap: int) -> list[TileRect]:
     """Row-major list of ``(y0, y1, x0, x1)`` source rectangles."""
     return [
         (y0, y1, x0, x1)
@@ -156,7 +156,7 @@ class Tiler:
         self,
         img: np.ndarray,
         proc: Callable[[np.ndarray], np.ndarray],
-        on_progress: Optional[Callable[[int, int], None]] = None,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> np.ndarray:
         h, w = img.shape[0], img.shape[1]
         s = self.scale
@@ -188,8 +188,8 @@ class Tiler:
         band_h = max(y1 - y0 for y0, y1 in ys) * s
         acc = np.zeros((band_h, sw * s, img.shape[2]), np.float32)
         wsum = np.zeros((band_h, sw * s, 1), np.float32)
-        carry_acc: Optional[np.ndarray] = None
-        carry_wsum: Optional[np.ndarray] = None
+        carry_acc: np.ndarray | None = None
+        carry_wsum: np.ndarray | None = None
 
         band_base = 0
         done = 0
@@ -252,7 +252,7 @@ class Tiler:
         self,
         img: np.ndarray,
         proc_factory: Callable[[int], Callable[[np.ndarray], np.ndarray]],
-        on_progress: Optional[Callable[[int, int], None]] = None,
+        on_progress: Callable[[int, int], None] | None = None,
         min_tile: int = 64,
     ) -> np.ndarray:
         """Retry with progressively smaller tiles when the GPU runs out of memory.

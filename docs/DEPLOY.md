@@ -71,7 +71,8 @@ working install you want `CUDAExecutionProvider` (and ideally
 
 ### 1.2 Download the models
 
-Nothing works until at least one checkpoint is on disk.
+Nothing works until at least one checkpoint is on disk — unless you only want
+the model-free backends, which need nothing at all.
 
 ```bash
 pixelboost models download --model realesrgan-x4plus
@@ -79,6 +80,13 @@ pixelboost models download --model realesr-general-x4v3     # the fast one
 pixelboost models                    # list what you have
 pixelboost models usage              # disk consumption
 ```
+
+**No model? Two backends still work.** `--backend classical` and
+`--backend upthrum` are constructible on a bare install with no download and no
+checkpoint. Use them for the health check in §2.5, for text/UI/line-art traffic,
+and as the `fallback_model` so a broken install degrades in quality instead of
+returning a 500. See [README.md § UPTHRUM](../README.md#upthrum) for when to
+prefer which.
 
 Default location is `~/.cache/pixelboost/models`. Move it with
 `PIXELBOOST_HOME=/srv/pixelboost/data` or `models_dir:` in the config file.
@@ -417,10 +425,13 @@ with Engine() as engine, ThreadPoolExecutor(max_workers=2) as pool:
 ## 6. Production checklist
 
 - [ ] `pixelboost capabilities` shows the provider you expect
-- [ ] Models downloaded **and** `warmup: true` in the config
+- [ ] `pixelboost capabilities` lists `"upthrum"` in `backends` if you intend to offer it
+- [ ] Models downloaded **and** `warmup: true` in the config (skippable for a
+      classical/upthrum-only deployment)
 - [ ] `pixelboost.yaml` has an explicit `backend`, `model`, `provider`
 - [ ] `threads` set, not left at 0, whenever `workers > 1`
-- [ ] `max_pixels` set to something a 50 MP upload cannot blow past
+- [ ] `max_pixels` set to something a 50 MP upload cannot blow past — this is
+      the *only* guard on the upthrum backend, which does not tile
 - [ ] `api_keys` non-empty if the port is reachable from anywhere
 - [ ] nginx `client_max_body_size` ≥ the app's `max_upload_mb`
 - [ ] nginx `proxy_read_timeout` ≥ your worst-case job time
@@ -440,6 +451,9 @@ with Engine() as engine, ThreadPoolExecutor(max_workers=2) as pool:
 | First request takes 60+ s, later ones are fast | TensorRT engine build, or cold model load | `warmup: true`; persist `PIXELBOOST_TRT_CACHE` |
 | `RuntimeError: CUDA out of memory` | tile too large | `--tile 256`, or leave `--tile 0` off and let `run_resilient` halve it |
 | Visible grid / seams in the output | overlap too small for the model's receptive field | `--tile-overlap 32` (or 48 for x4plus) |
+| `--backend upthrum` request times out on large scans | whole-image analysis, no tiling; topology is over half the runtime at scale 2 | lower `--max-pixels`, or `--upthrum-bands 1`; `--no-upthrum-topology` is faster but removes the constraint |
+| UPTHRUM output looks washed out in flat areas | coherence gate damping genuinely incoherent (noisy) regions | `--upthrum-coherence-power 0.3` |
+| UPTHRUM invented texture on a noisy source | persistence threshold under the noise floor | raise `--upthrum-persistence` toward 0.22 |
 | Output is crunchy / oversharpened | detail and sharpen stacked | `--detail 0.2 --sharpen 0`; see TUNING.md |
 | Skin looks waxy, foliage like watercolour | detail too high | `--detail 0.15` |
 | Grey/noisy borders along the image edge | reflective padding interacting with a small `tile_pad` | `--tile-pad 24` |

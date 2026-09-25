@@ -25,6 +25,8 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 
+import contextlib
+
 import numpy as np  # noqa: E402
 
 from pixelboost.config import load_config  # noqa: E402
@@ -54,10 +56,8 @@ def test_image(size: int, seed: int = 7) -> np.ndarray:
 def bench(backend, opts, image, repeat: int, warmup: int) -> dict:
     h, w = image.shape[:2]
     for _ in range(max(0, warmup)):
-        try:
+        with contextlib.suppress(PixelBoostError):
             Pipeline(backend, opts, w, h).run(image.copy())
-        except PixelBoostError:
-            pass
 
     runs = []
     tiles = 0

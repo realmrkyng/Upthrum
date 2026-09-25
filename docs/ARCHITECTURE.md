@@ -33,9 +33,20 @@ pixelboost/
   backends/
     base.py              the 3-method Backend contract
     classical.py         model-free Lanczos + guided detail  (always available)
+    upthrum_backend.py   model-free phase reconstruction + topology  (always available)
     onnx_backend.py      ONNX Runtime: CPU / CUDA / TensorRT / DirectML / CoreML
     torch_backend.py     RRDBNet + SRVGGNetCompact for .pth checkpoints
     registry.py          auto-selection, capability reporting
+
+  upthrum/               the UPTHRUM method, one file per stage, read in order
+    params.py            every knob, tied to the equation it belongs to
+    filters.py           frequency-domain operators: Riesz, exact derivative, band bank
+    transform.py         monogenic decomposition -> amplitude, phase, orientation, grad(phi)
+    transport.py         sub-pixel phase transport -- the core idea
+    topology.py          0-D persistent homology -- the constraint
+    reconstruct.py       reassembly, topological repair, chroma injection
+    engine.py            public API + the run report
+    torch_ops.py         optional CUDA path for the FFT-bound analysis
 
   server/
     app.py               FastAPI: sync + async endpoints, auth, upload limits
@@ -51,9 +62,10 @@ layer can be tested in isolation.
 
 ```python
 class Backend:
-    name: str                  # "classical" | "onnx" | "torch"
+    name: str                  # "classical" | "upthrum" | "onnx" | "torch"
     native_scale: int          # the scale the model was trained for
     requires_tiling: bool      # does a full-size forward pass fit in memory?
+    handles_detail: bool       # does the backend run the detail pass itself?
     device: str                # "cpu" | "cuda" | "tensorrt" | ...
 
     def process(self, tile: np.ndarray, scale: float) -> np.ndarray: ...
@@ -68,8 +80,14 @@ scheduling all live above it, which is why the HTTP layer has no `if cuda`
 branches anywhere.
 
 `requires_tiling` is the one piece of self-knowledge a backend needs. The
-classical backend runs whole images (tiling would only introduce seams for no
-gain); neural backends always tile.
+classical and upthrum backends run whole images; neural backends always tile.
+
+`handles_detail` exists because a neural net's output is systematically soft and
+wants a guided-filter lift, while `classical` and `upthrum` already integrate
+that pass. Without the flag the pipeline would apply the lift twice, and it
+*did* — the flag replaced a hardcoded `name != "classical"` check the moment a
+second self-detailing backend existed. Backends that do nothing (`nearest`)
+leave it False so the user keeps manual control.
 
 ## Backend auto-selection
 
@@ -86,8 +104,14 @@ dependency that serves both CPU and GPU from one artifact. Torch second because
 it is what published weights are, but 800 MB to install. Classical last as an
 always-available floor.
 
-An explicit `--backend cuda`-style request is honoured literally and raises on
-failure. Silent fallback is right for a web service and wrong for a benchmark.
+`upthrum` is **never** auto-selected. It is always available and needs no model,
+but it is 4–6x slower than classical and the two have genuinely different
+characters — phase reconstruction holds text and line art, GAN models win on
+texture-heavy photographs. That is an editorial decision, so it belongs to the
+operator: `--backend upthrum`.
+
+An explicit `--backend` request is honoured literally and raises on failure.
+Silent fallback is right for a web service and wrong for a benchmark.
 
 ## Stage pipeline
 
@@ -185,6 +209,41 @@ step edge overshoots by ~11 %. A real photograph rarely contains such an edge,
 and the pipeline clamps to `[0,1]` at the end. For hard-edged artwork, prefer a
 neural backend.
 
+## The upthrum backend in detail
+
+Full derivation: [docs/UPTHRUM.md](UPTHRUM.md). What matters architecturally:
+
+**Same contract, different variable.** `UpthrumBackend.process` is a two-line
+adapter over `pixelboost.upthrum.Upthrum.enhance` — the interesting part is the
+`upthrum/` package, which knows nothing about backends, files or HTTP. The
+package is importable and testable on its own, which is why its 50 invariant
+tests run in isolation from the pipeline.
+
+**`native_scale = 1` is load-bearing.** The transport is defined for an
+arbitrary output lattice, not for an integer multiplier, so the pipeline hands it
+the *true fractional* scale and the exact-fit stage afterwards is a no-op for
+this backend. That is why `--width 2400` on upthrum does not resample twice, and
+why the shape is right to the pixel for every sizing flag.
+
+**`requires_tiling = False` is not an optimisation, it is correctness.** The
+log-Gabor analysis is defined on the whole 2-D spectrum; tiles would put a seam
+through every band. Output rows are streamed in blocks instead
+(`upthrum/band_rows`), so memory scales with input area, and `max_pixels` is the
+guard that matters. This is the mirror image of the classical backend's
+streaming, which tiles on *input* because its operators are local.
+
+**No parameters to cache.** Unlike onnx/torch there is no session, no device
+allocation and no mapped weight file. `close()` is an explicit no-op rather than
+an inherited accident. The `Engine`'s backend cache key includes
+`json.dumps(opts.extra)` for exactly this backend: its parameters travel in
+`extra["upthrum"]`, and without that term two requests with different
+`--upthrum-bands` would silently share one backend instance.
+
+**Thread safety.** The engine is stateless between calls — nothing is cached
+across `process` invocations — so one instance can be shared by the server's
+worker pool, like the classical backend and unlike an ONNX session that reports
+its own thread affinity.
+
 ## Concurrency model
 
 **Library**: backends are cached under an `RLock` and shared. `InferenceSession.run`
@@ -223,7 +282,7 @@ actual host before sizing anything.
 
 ## Testing strategy
 
-94 tests, no network, no model files, under two seconds.
+176 tests, no network, no model files, a few seconds.
 
 - `test_ops.py` -- operator correctness: DC preservation, edge preservation
   ordering, bounded ringing, no compounding across chained steps.
@@ -234,6 +293,14 @@ actual host before sizing anything.
   greyscale round-trip, max-pixel clamping.
 - `test_config.py` -- config layering, model registry integrity, provider
   aliasing.
+- `test_upthrum.py` -- the method's invariants. Each states a property and fails
+  loudly when it stops holding; several exist because the corresponding bug was
+  actually made, and say so. See docs/UPTHRUM.md §8.
+- `test_upthrum_backend.py` -- the wiring: registry, option plumbing, the
+  `handles_detail` contract (tested with a stub backend so the assertion is
+  exact), backend caching by parameter, and CLI flag mapping.
 
 The tiled-equals-whole test is the one that catches real regressions; it caught
-a carry-row off-by-2x during development.
+a carry-row off-by-2x during development. In `test_upthrum.py` the equivalent is
+identity at scale 1, which caught the missing phase term — a bug whose symptom
+was a *plausible* output rather than an error.
