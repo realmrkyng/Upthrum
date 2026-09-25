@@ -2,8 +2,6 @@
 
 **CPU/GPU accelerated image quality enhancement and super-resolution — self-hostable in one command.**
 
-[![CI](https://github.com/your-org/pixelboost/actions/workflows/ci.yml/badge.svg)](https://github.com/your-org/pixelboost/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
 [![Tests](https://img.shields.io/badge/tests-176%20passing-brightgreen.svg)](tests)
 
